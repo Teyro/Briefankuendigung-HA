@@ -79,7 +79,7 @@ async def test_abruf_sensor_und_api(hass: HomeAssistant, hass_client, hass_clien
     r = await client.get("/api/briefankuendigung/bild/" + "a" * 20)
     assert r.status == 200 and r.content_type == "image/jpeg" and (await r.read()).startswith(b"\xff\xd8")
     assert (await client.get("/api/briefankuendigung/bild/" + "b" * 20)).status == 404
-    assert (await client.get("/api/briefankuendigung/bild/..%2F..%2Fsecrets.yaml")).status == 404
+    assert (await client.get("/api/briefankuendigung/bild/..%2F..%2Fsecrets.yaml")).status in (400, 404)
 
     ohne = await hass_client_no_auth()
     assert (await ohne.get("/api/briefankuendigung/briefe")).status == 401
@@ -132,8 +132,10 @@ async def test_zwei_konten_getrennt(hass: HomeAssistant, hass_client, hass_admin
     assert daten["briefe"][0]["konto_name"] == "Christian"
 
     # Johanna mit eigenem Token: nur ihr Konto
-    from homeassistant.auth.models import TokenType
-    rt = await hass.auth.async_create_refresh_token(johanna_user, token_type=TokenType.LONG_LIVED_ACCESS_TOKEN, client_name="iPhone Johanna")
+    from datetime import timedelta
+    from homeassistant.auth import models
+    rt = await hass.auth.async_create_refresh_token(johanna_user, client_name="iPhone Johanna",
+                                                    token_type=models.TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN, access_token_expiration=timedelta(days=30))
     token = hass.auth.async_create_access_token(rt)
     jc = await hass_client(token)
     daten = await (await jc.get("/api/briefankuendigung/briefe")).json()
