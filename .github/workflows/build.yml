@@ -1,0 +1,37 @@
+name: Add-on bauen und prüfen
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  bauen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image bauen (amd64)
+        run: docker build --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.20 -t brief briefankuendigung
+      - name: Starten, Seite und Status abrufen
+        run: |
+          mkdir -p daten medien
+          echo '{"imap_server":"127.0.0.1","imap_port":993,"benutzer":"","passwort":"","absender":"ankuendigung@brief.deutschepost.de","ordner":"INBOX","abrufzeiten":"02:00,05:00","tage":14}' > daten/options.json
+          docker run -d --name addon -p 8099:8099 -e NUR_INGRESS=0 -e TZ=Europe/Berlin -v "$PWD/daten:/data" -v "$PWD/medien:/media" brief
+          for i in $(seq 1 20); do curl -fs http://127.0.0.1:8099/api/status && break; sleep 1; done
+          echo
+          curl -fs http://127.0.0.1:8099/ | grep -q "Briefankündigung"
+          curl -fs http://127.0.0.1:8099/api/status | grep -q '"eingerichtet":false'
+          sleep 6
+          test -f medien/briefankuendigung/index.json
+          grep -q "Noch nicht eingerichtet" medien/briefankuendigung/index.json
+          docker exec addon date
+      - name: Ohne NUR_INGRESS=0 nur Ingress
+        run: |
+          docker run -d --name addon2 -p 8100:8099 -v "$PWD/daten:/data" brief
+          sleep 3
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/status)
+          echo "HTTP $code"; test "$code" = "403"
+      - name: Container-Logs
+        if: always()
+        run: |
+          docker logs addon 2>&1 | tail -40 || true
+          docker logs addon2 2>&1 | tail -10 || true

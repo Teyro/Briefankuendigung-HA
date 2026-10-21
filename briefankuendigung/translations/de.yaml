@@ -1,0 +1,25 @@
+configuration:
+  imap_server:
+    name: IMAP-Server
+    description: "GMX: imap.gmx.net · Web.de: imap.web.de · Gmail: imap.gmail.com"
+  imap_port:
+    name: IMAP-Port
+    description: Normalerweise 993 (verschlüsselt)
+  benutzer:
+    name: E-Mail-Adresse
+    description: Die Anmeldung des Postfachs, z. B. name@gmx.de
+  passwort:
+    name: Passwort
+    description: Passwort des Postfachs (bei Zwei-Faktor-Anmeldung ein App-Passwort). Bei GMX in den Einstellungen „POP3/IMAP-Abruf“ erlauben.
+  absender:
+    name: Absender der Ankündigungen
+    description: Nur Mails von dieser Adresse werden gelesen
+  ordner:
+    name: Ordner
+    description: In welchem Ordner die Ankündigungen landen (Standard INBOX = Posteingang)
+  abrufzeiten:
+    name: Abrufzeiten
+    description: Uhrzeiten, mit Komma getrennt (Zeitzone von Home Assistant)
+  tage:
+    name: Tage aufheben
+    description: So lange bleiben Briefe in der Liste
