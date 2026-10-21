@@ -208,6 +208,7 @@ class BriefeAnsicht(HomeAssistantView):
             stand = max(stand, konto["stand"])
             fehler = fehler or (f"{a.name}: {konto['fehler']}" if konto["fehler"] else "")
         briefe.sort(key=lambda b: -b["datum"])
+        konten.sort(key=lambda k: k["name"].lower())
         return self.json({"stand": stand, "fehler": fehler, "konten": konten, "briefe": briefe})
 
 
