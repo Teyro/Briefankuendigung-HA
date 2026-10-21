@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mailbox for letter announcements",
+        "description": "The mailbox that receives Deutsche Post mails (\"Ein Brief ist unterwegs zu Ihnen\"). For GMX enable \"POP3/IMAP access\" in the settings; with two-factor login use an app password. For several mailboxes simply add the integration again. \"Visible to\" limits widget/API access to the chosen users.",
+        "data": {
+          "name": "Account name (e.g. Christian, Johanna)",
+          "benutzer": "E-mail address",
+          "passwort": "Password (or app password)",
+          "server": "IMAP server",
+          "port": "IMAP port",
+          "abrufzeiten": "Fetch times (e.g. 02:00, 05:00)",
+          "tage": "Keep letters for this many days",
+          "absender": "Sender of the announcements",
+          "ordner": "Folder (INBOX = inbox)",
+          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)"
+        }
+      }
+    },
+    "error": {
+      "anmeldung": "Login rejected – check address/password and enable \"POP3/IMAP access\" at GMX.",
+      "verbindung": "IMAP server not reachable – check server and port.",
+      "unbekannt": "Unexpected error while checking the mailbox."
+    },
+    "abort": {
+      "already_configured": "This mailbox is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Letter announcements – options",
+        "data": {
+          "abrufzeiten": "Fetch times (e.g. 02:00, 05:00)",
+          "tage": "Keep letters for this many days",
+          "absender": "Sender of the announcements",
+          "ordner": "Folder (INBOX = inbox)",
+          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "briefe": {
+        "name": "Announced letters"
+      }
+    },
+    "button": {
+      "abrufen": {
+        "name": "Fetch now"
+      }
+    }
+  }
+}

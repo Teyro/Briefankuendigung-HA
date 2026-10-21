@@ -1,0 +1,56 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Postfach für Briefankündigungen",
+        "description": "Das Postfach, in dem die Mails der Deutschen Post („Ein Brief ist unterwegs zu Ihnen“) ankommen. Bei GMX in den Einstellungen „POP3/IMAP-Abruf“ erlauben; mit Zwei-Faktor-Anmeldung ein App-Passwort verwenden. Für mehrere Postfächer (z. B. deins und Johannas) die Integration einfach mehrmals hinzufügen. Mit „Sichtbar für“ siehst du in Widget und API nur die Briefe der gewählten Benutzer.",
+        "data": {
+          "name": "Name des Kontos (z. B. Christian, Johanna)",
+          "benutzer": "E-Mail-Adresse",
+          "passwort": "Passwort (bzw. App-Passwort)",
+          "server": "IMAP-Server",
+          "port": "IMAP-Port",
+          "abrufzeiten": "Abrufzeiten (z. B. 02:00, 05:00)",
+          "tage": "Briefe so viele Tage aufheben",
+          "absender": "Absender der Ankündigungen",
+          "ordner": "Ordner (INBOX = Posteingang)",
+          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)"
+        }
+      }
+    },
+    "error": {
+      "anmeldung": "Anmeldung abgelehnt – Adresse/Passwort prüfen und bei GMX „POP3/IMAP-Abruf“ erlauben.",
+      "verbindung": "IMAP-Server nicht erreichbar – Server und Port prüfen.",
+      "unbekannt": "Unerwarteter Fehler beim Prüfen des Postfachs."
+    },
+    "abort": {
+      "already_configured": "Dieses Postfach ist schon eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Briefankündigung – Optionen",
+        "data": {
+          "abrufzeiten": "Abrufzeiten (z. B. 02:00, 05:00)",
+          "tage": "Briefe so viele Tage aufheben",
+          "absender": "Absender der Ankündigungen",
+          "ordner": "Ordner (INBOX = Posteingang)",
+          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "briefe": {
+        "name": "Angekündigte Briefe"
+      }
+    },
+    "button": {
+      "abrufen": {
+        "name": "Jetzt abrufen"
+      }
+    }
+  }
+}
