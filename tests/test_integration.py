@@ -11,12 +11,21 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.briefankuendigung import abruf, zeiten_lesen
 from custom_components.briefankuendigung.const import DOMAIN
 
 DATEN = {"name": "Kim", "benutzer": "kim@gmx.de", "passwort": "geheim", "server": "imap.gmx.net", "port": 993,
          "abrufzeiten": "02:00, 05:00", "tage": 14, "absender": "ankuendigung@brief.deutschepost.de", "ordner": "INBOX"}
+
+
+def eid(hass: HomeAssistant, entry, art: str) -> str:
+    """Entitäts-ID über die feste unique_id (der Name hängt von der Sprache ab)."""
+    plattform = "button" if art == "abrufen" else "sensor"
+    e = er.async_get(hass).async_get_entity_id(plattform, DOMAIN, f"{entry.entry_id}_{art}")
+    assert e, art
+    return e
 
 
 @pytest.fixture(autouse=True)
@@ -51,11 +60,11 @@ async def test_abruf_sensor_und_api(hass: HomeAssistant, hass_client, hass_clien
     with patch.object(abruf, "abrufen", return_value=(neue, {"INBOX:1", "INBOX:2"})) as aufruf:
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-        await hass.services.async_call("button", "press", {"entity_id": "button.briefankundigung_kim_jetzt_abrufen"}, blocking=True)
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
         await hass.async_block_till_done()
         assert aufruf.called
 
-    zustand = hass.states.get("sensor.briefankundigung_kim_angekundigte_briefe")
+    zustand = hass.states.get(eid(hass, entry, "briefe"))
     assert zustand is not None, [s.entity_id for s in hass.states.async_all()]
     assert zustand.state == "1"  # nur der Brief der letzten 3 Tage
     assert zustand.attributes["gesamt"] == 2
@@ -78,7 +87,7 @@ async def test_abruf_sensor_und_api(hass: HomeAssistant, hass_client, hass_clien
 
     # Anmeldefehler wird angezeigt, Briefe bleiben
     with patch.object(abruf, "abrufen", side_effect=abruf.AnmeldeFehler("nein")):
-        await hass.services.async_call("button", "press", {"entity_id": "button.briefankundigung_kim_jetzt_abrufen"}, blocking=True)
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
         await hass.async_block_till_done()
     daten = await (await client.get("/api/briefankuendigung/briefe")).json()
     assert "Anmeldung" in daten["fehler"] and len(daten["briefe"]) == 2
@@ -108,11 +117,12 @@ async def test_zwei_konten_getrennt(hass: HomeAssistant, hass_client, hass_admin
     with patch.object(abruf, "abrufen", side_effect=antwort):
         assert await hass.config_entries.async_setup(e1.entry_id)
         await hass.async_block_till_done()
-        for knopf in ("button.briefankundigung_christian_jetzt_abrufen", "button.briefankundigung_johanna_jetzt_abrufen"):
-            await hass.services.async_call("button", "press", {"entity_id": knopf}, blocking=True)
+        for e in (e1, e2):
+            await hass.services.async_call("button", "press", {"entity_id": eid(hass, e, "abrufen")}, blocking=True)
         await hass.async_block_till_done()
-    assert hass.states.get("sensor.briefankundigung_christian_angekundigte_briefe").state == "1"
-    assert hass.states.get("sensor.briefankundigung_johanna_angekundigte_briefe").state == "1"
+    assert hass.states.get(eid(hass, e1, "briefe")).state == "1"
+    assert hass.states.get(eid(hass, e2, "briefe")).state == "1"
+    assert "christian" in eid(hass, e1, "briefe") and "johanna" in eid(hass, e2, "briefe")  # Gerätename je Konto
 
     # Admin (nicht Johanna) sieht nur Christians Konto
     client = await hass_client()

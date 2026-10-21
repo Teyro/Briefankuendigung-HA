@@ -15,6 +15,15 @@ abruf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(abruf)
 
 
+@pytest.fixture(autouse=True)
+def netz_erlauben(request):
+    """Die HA-Testumgebung sperrt Netzverbindungen – hier braucht es eine zum lokalen Nachbau."""
+    try:
+        request.getfixturevalue("socket_enabled")
+    except pytest.FixtureLookupError:
+        pass
+
+
 @pytest.fixture
 def imap():
     n = ImapNachbau({101: MAIL_EINGEBETTET, 102: MAIL_VERLINKT, 103: MAIL_LATIN1})
