@@ -23,7 +23,8 @@ def geraet(entry: ConfigEntry) -> DeviceInfo:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    async_add_entities([BriefeSensor(hass.data[DOMAIN][entry.entry_id], entry)])
+    abrufer = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([BriefeSensor(abrufer, entry), BriefeSensor(abrufer, entry, "pakete")])
 
 
 class BriefeSensor(SensorEntity):
@@ -33,10 +34,18 @@ class BriefeSensor(SensorEntity):
     _attr_native_unit_of_measurement = "Briefe"
     _attr_should_poll = False
 
-    def __init__(self, abrufer, entry: ConfigEntry) -> None:
+    def __init__(self, abrufer, entry: ConfigEntry, art: str = "briefe") -> None:
         self._abrufer = abrufer
-        self._attr_unique_id = f"{entry.entry_id}_briefe"
+        self._art = "paket" if art == "pakete" else "brief"
+        self._attr_unique_id = f"{entry.entry_id}_{art}"
+        self._attr_translation_key = art
+        if art == "pakete":
+            self._attr_icon = "mdi:package-variant-closed"
+            self._attr_native_unit_of_measurement = "Pakete"
         self._attr_device_info = geraet(entry)
+
+    def _meine(self) -> list[dict]:
+        return [b for b in self._abrufer.index["briefe"] if b.get("art", "brief") == self._art]
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(async_dispatcher_connect(self.hass, f"{SIGNAL_NEU}_{self._abrufer.entry.entry_id}", self._neu))
@@ -48,15 +57,16 @@ class BriefeSensor(SensorEntity):
     @property
     def native_value(self) -> int:
         grenze = (time.time() - 3 * 86400) * 1000
-        return sum(1 for b in self._abrufer.index["briefe"] if b["datum"] >= grenze)
+        return sum(1 for b in self._meine() if b["datum"] >= grenze)
 
     @property
     def extra_state_attributes(self) -> dict:
         i = self._abrufer.index
+        meine = self._meine()
         iso = lambda ms: datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ms else None  # noqa: E731
         return {
-            "gesamt": len(i["briefe"]),
-            "letzte_ankuendigung": iso(i["briefe"][0]["datum"]) if i["briefe"] else None,
+            "gesamt": len(meine),
+            "letzte_ankuendigung": iso(meine[0]["datum"]) if meine else None,
             "letzter_abruf": iso(i.get("stand", 0)),
             "fehler": i.get("fehler") or None,
         }

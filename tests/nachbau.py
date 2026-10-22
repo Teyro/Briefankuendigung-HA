@@ -71,6 +71,30 @@ MAIL_LATIN1 = (
 ).encode("latin-1")
 
 
+MAIL_DHL = "\r\n".join([
+    "From: DHL Paket <noreply@dhl.de>",
+    "Subject: Ihre DHL Sendung kommt heute",
+    "Date: Wed, 21 Oct 2026 07:12:00 +0200",
+    "Message-ID: <paket1@dhl.de>",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    "<p>Guten Tag,</p><p>Ihre Sendung von <b>Thalia Bücher GmbH</b> wird heute zugestellt.</p>"
+    "<p>Sendungsnummer: 00340434161094015902</p><img src=\"https://www.dhl.de/werbung.jpg\">",
+    "",
+]).encode()
+
+MAIL_DHL_NEWSLETTER = "\r\n".join([
+    "From: DHL <newsletter@dhl.de>",
+    "Subject: Unsere Herbst-Angebote",
+    "Date: Wed, 21 Oct 2026 09:00:00 +0200",
+    "Message-ID: <news1@dhl.de>",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Jetzt Briefmarken online kaufen und sparen.",
+    "",
+]).encode()
+
+
 class ImapNachbau:
     """Startet einen kleinen IMAP-Server in einem Thread."""
 
@@ -103,7 +127,13 @@ class ImapNachbau:
                     elif cmd in ("EXAMINE", "SELECT"):
                         self.wfile.write(b"* %d EXISTS\r\n" % len(nachbau.mails) + tag.encode() + b" OK [READ-ONLY] done\r\n")
                     elif cmd == "UID" and arg.upper().startswith("SEARCH"):
-                        ids = " ".join(str(k) for k in nachbau.mails)
+                        # FROM "x" wie bei echten Servern als Teiltext des Absenders
+                        m = re.search(r'FROM "((?:[^"\\]|\\.)*)"', arg, re.I)
+                        von = m.group(1).lower() if m else ""
+                        def absender(mail: bytes) -> str:
+                            k = re.search(rb"^From:(.*)$", mail, re.M | re.I)
+                            return k.group(1).decode("latin-1").lower() if k else ""
+                        ids = " ".join(str(k) for k, v in nachbau.mails.items() if von in absender(v))
                         self.wfile.write(f"* SEARCH {ids}\r\n{tag} OK SEARCH completed\r\n".encode())
                     elif cmd == "UID" and arg.upper().startswith("FETCH"):
                         if "PEEK" not in arg.upper():

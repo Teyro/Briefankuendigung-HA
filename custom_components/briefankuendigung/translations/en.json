@@ -14,7 +14,10 @@
           "tage": "Keep letters for this many days",
           "absender": "Sender of the announcements",
           "ordner": "Folder (INBOX = inbox)",
-          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)"
+          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)",
+          "paket_absender": "Sender of parcel announcements (DHL; empty = no parcels)",
+          "wichtig": "Important senders (keywords, comma-separated)",
+          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)"
         }
       }
     },
@@ -36,7 +39,10 @@
           "tage": "Keep letters for this many days",
           "absender": "Sender of the announcements",
           "ordner": "Folder (INBOX = inbox)",
-          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)"
+          "ha_benutzer": "Visible to (Home Assistant users; none selected = all)",
+          "paket_absender": "Sender of parcel announcements (DHL; empty = no parcels)",
+          "wichtig": "Important senders (keywords, comma-separated)",
+          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)"
         }
       }
     }
@@ -45,11 +51,19 @@
     "sensor": {
       "briefe": {
         "name": "Announced letters"
+      },
+      "pakete": {
+        "name": "Announced parcels"
       }
     },
     "button": {
       "abrufen": {
         "name": "Fetch now"
+      }
+    },
+    "binary_sensor": {
+      "post_heute": {
+        "name": "Mail today"
       }
     }
   }

@@ -14,7 +14,10 @@
           "tage": "Briefe so viele Tage aufheben",
           "absender": "Absender der Ankündigungen",
           "ordner": "Ordner (INBOX = Posteingang)",
-          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)"
+          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)",
+          "paket_absender": "Absender der Paketankündigungen (DHL; leer = keine Pakete)",
+          "wichtig": "Wichtige Absender (Stichwörter, mit Komma getrennt)",
+          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)"
         }
       }
     },
@@ -36,7 +39,10 @@
           "tage": "Briefe so viele Tage aufheben",
           "absender": "Absender der Ankündigungen",
           "ordner": "Ordner (INBOX = Posteingang)",
-          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)"
+          "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)",
+          "paket_absender": "Absender der Paketankündigungen (DHL; leer = keine Pakete)",
+          "wichtig": "Wichtige Absender (Stichwörter, mit Komma getrennt)",
+          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)"
         }
       }
     }
@@ -45,11 +51,19 @@
     "sensor": {
       "briefe": {
         "name": "Angekündigte Briefe"
+      },
+      "pakete": {
+        "name": "Angekündigte Pakete"
       }
     },
     "button": {
       "abrufen": {
         "name": "Jetzt abrufen"
+      }
+    },
+    "binary_sensor": {
+      "post_heute": {
+        "name": "Post heute"
       }
     }
   }

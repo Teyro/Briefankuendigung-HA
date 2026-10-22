@@ -9,13 +9,14 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
-    SelectOptionDict, SelectSelector, SelectSelectorConfig, SelectSelectorMode, TextSelector, TextSelectorConfig, TextSelectorType,
+    BooleanSelector, SelectOptionDict, SelectSelector, SelectSelectorConfig, SelectSelectorMode, TextSelector, TextSelectorConfig,
+    TextSelectorType,
 )
 
 from . import abruf
 from .const import (
-    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_NAME, CONF_ORDNER, CONF_PASSWORT, CONF_PORT, CONF_SERVER, CONF_TAGE, CONF_ZEITEN,
-    DOMAIN, STANDARD,
+    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_EREIGNIS_ABSENDER, CONF_NAME, CONF_ORDNER, CONF_PAKET, CONF_PASSWORT, CONF_PORT,
+    CONF_SERVER, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, STANDARD,
 )
 
 ZEITEN_MUSTER = r"^\s*\d{1,2}:\d{2}([ ,;]+\d{1,2}:\d{2})*\s*$"
@@ -34,6 +35,9 @@ def _optionen_schema(v: dict, benutzer: list[SelectOptionDict]) -> dict:
         vol.Required(CONF_TAGE, default=v.get(CONF_TAGE, STANDARD[CONF_TAGE])): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
         vol.Required(CONF_ABSENDER, default=v.get(CONF_ABSENDER, STANDARD[CONF_ABSENDER])): str,
         vol.Required(CONF_ORDNER, default=v.get(CONF_ORDNER, STANDARD[CONF_ORDNER])): str,
+        vol.Optional(CONF_PAKET, default=v.get(CONF_PAKET, STANDARD[CONF_PAKET])): str,
+        vol.Optional(CONF_WICHTIG, default=v.get(CONF_WICHTIG, STANDARD[CONF_WICHTIG])): TextSelector(TextSelectorConfig(multiline=True)),
+        vol.Optional(CONF_EREIGNIS_ABSENDER, default=v.get(CONF_EREIGNIS_ABSENDER, STANDARD[CONF_EREIGNIS_ABSENDER])): BooleanSelector(),
     }
 
 

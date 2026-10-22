@@ -2,9 +2,12 @@
 
 Zu festen Zeiten (Standard 02:00 und 05:00) werden die Mails von ankuendigung@brief.deutschepost.de
 gelesen, Absender und Umschlagbild herausgezogen und im Ordner <config>/briefankuendigung abgelegt.
-Für das iPhone-Widget gibt es zwei Adressen, die nur mit gültigem Home-Assistant-Token antworten:
+Optional werden auch DHL-Paketankündigungen gelesen. Je neuem Brief/Paket gibt es das Ereignis
+„briefankuendigung_neu“ (für Automationen), dazu den Sensor „Post heute“.
+Für das iPhone-Widget gibt es Adressen, die nur mit gültigem Home-Assistant-Token antworten:
   GET /api/briefankuendigung/briefe        – Liste (JSON)
   GET /api/briefankuendigung/bild/<id>     – Umschlagbild
+  GET /api/briefankuendigung/archiv        – Archiv der letzten zwei Jahre (Datum, Absender, Art)
 """
 
 from __future__ import annotations
@@ -25,12 +28,16 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later, async_track_time_change
+from homeassistant.util import dt as dt_util
 
 from . import abruf
-from .const import CONF_BENUTZER_HA, CONF_NAME, CONF_TAGE, CONF_ZEITEN, DOMAIN, SIGNAL_NEU, STANDARD
+from .const import (
+    ARCHIV_TAGE, CONF_BENUTZER_HA, CONF_EREIGNIS_ABSENDER, CONF_NAME, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS, SIGNAL_NEU,
+    STANDARD,
+)
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
 ENDUNG = {"image/png": "png", "image/gif": "gif", "image/webp": "webp"}
 
 
@@ -51,7 +58,7 @@ class BriefAbruf:
         self.hass = hass
         self.entry = entry
         self.ordner = hass.config.path(DOMAIN, entry.entry_id)
-        self.index: dict = {"stand": 0, "fehler": "", "briefe": [], "uids": []}
+        self.index: dict = {"stand": 0, "fehler": "", "briefe": [], "uids": [], "archiv": []}
         self.laeuft = False
 
     @property
@@ -61,6 +68,14 @@ class BriefAbruf:
     @property
     def name(self) -> str:
         return self.entry.data.get(CONF_NAME) or self.entry.title
+
+    def ist_wichtig(self, absender: str) -> bool:
+        return abruf.wichtig(absender, self.cfg.get(CONF_WICHTIG, ""))
+
+    def heute(self) -> list[dict]:
+        """Heute angekündigte Briefe und Pakete (nach Ortszeit)."""
+        tag = dt_util.now().date()
+        return [b for b in self.index["briefe"] if dt_util.as_local(dt_util.utc_from_timestamp(b["datum"] / 1000)).date() == tag]
 
     def sichtbar_fuer(self, benutzer) -> bool:
         """Darf dieser Home-Assistant-Benutzer das Konto sehen? Leere Liste = alle."""
@@ -78,8 +93,16 @@ class BriefAbruf:
 
     def _speichern(self, neue: list[dict]) -> None:
         os.makedirs(self.ordner, exist_ok=True)
+        archiv = self.index.setdefault("archiv", [])
+        bekannt = {a["id"] for a in archiv}
         for b in neue:
             eintrag = {k: b[k] for k in ("id", "datum", "absender", "betreff")}
+            eintrag["art"] = b.get("art", "brief")
+            for k in ("sendung", "stand"):
+                if b.get(k):
+                    eintrag[k] = b[k]
+            if b["id"] not in bekannt:
+                archiv.append({"id": b["id"], "datum": b["datum"], "absender": b["absender"], "art": eintrag["art"]})
             eintrag["bild"] = None
             if b.get("bild"):
                 datei = f"{b['id']}.{ENDUNG.get(b['bild_typ'], 'jpg')}"
@@ -96,6 +119,8 @@ class BriefAbruf:
                 except OSError:
                     pass
         self.index["briefe"] = sorted((x for x in self.index["briefe"] if x["datum"] >= grenze), key=lambda x: -x["datum"])
+        archiv_grenze = (time.time() - ARCHIV_TAGE * 86400) * 1000
+        self.index["archiv"] = sorted((a for a in archiv if a["datum"] >= archiv_grenze), key=lambda a: -a["datum"])[:3000]
         tmp = os.path.join(self.ordner, "index.json.neu")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.index, f, ensure_ascii=False)
@@ -142,6 +167,21 @@ class BriefAbruf:
             finally:
                 self.laeuft = False
             async_dispatcher_send(self.hass, f"{SIGNAL_NEU}_{self.entry.entry_id}")
+            self._melden(neue)
+
+    @callback
+    def _melden(self, neue: list[dict]) -> None:
+        """Ereignis je neuem Brief/Paket – Absender nur, wenn in den Optionen erlaubt (die Datenbank speichert Ereignisse)."""
+        mit_absender = bool(self.cfg.get(CONF_EREIGNIS_ABSENDER))
+        for b in sorted(neue, key=lambda x: x["datum"]):
+            daten = {
+                "konto": self.name, "konto_id": self.entry.entry_id, "art": b.get("art", "brief"),
+                "wichtig": self.ist_wichtig(b["absender"]),
+                "datum": dt_util.utc_from_timestamp(b["datum"] / 1000).isoformat(),
+            }
+            if mit_absender:
+                daten["absender"] = b["absender"]
+            self.hass.bus.async_fire(EREIGNIS, daten)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -154,6 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not daten.get("_ansichten"):
         hass.http.register_view(BriefeAnsicht(hass))
         hass.http.register_view(BildAnsicht(hass))
+        hass.http.register_view(ArchivAnsicht(hass))
         daten["_ansichten"] = True
 
     for stunde, minute in zeiten_lesen(abrufer.cfg.get(CONF_ZEITEN, "")):
@@ -204,7 +245,8 @@ class BriefeAnsicht(HomeAssistantView):
                 continue
             konto = {"id": a.entry.entry_id, "name": a.name, "stand": a.index.get("stand", 0), "fehler": a.index.get("fehler", "")}
             konten.append(konto)
-            briefe += [{**b, "bild": bool(b.get("bild")), "konto": a.entry.entry_id, "konto_name": a.name} for b in a.index["briefe"]]
+            briefe += [{**b, "art": b.get("art", "brief"), "bild": bool(b.get("bild")), "wichtig": a.ist_wichtig(b["absender"]),
+                        "konto": a.entry.entry_id, "konto_name": a.name} for b in a.index["briefe"]]
             stand = max(stand, konto["stand"])
             fehler = fehler or (f"{a.name}: {konto['fehler']}" if konto["fehler"] else "")
         briefe.sort(key=lambda b: -b["datum"])
@@ -233,3 +275,27 @@ class BildAnsicht(HomeAssistantView):
             if ergebnis:
                 return web.Response(body=ergebnis[0], content_type=ergebnis[1], headers={"Cache-Control": "private, max-age=86400"})
         return web.Response(status=404)
+
+
+class ArchivAnsicht(HomeAssistantView):
+    """Archiv: alle angekündigten Briefe/Pakete der letzten zwei Jahre (ohne Bilder). ?q= sucht im Absender, ?konto= filtert."""
+
+    url = "/api/briefankuendigung/archiv"
+    name = "api:briefankuendigung:archiv"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request) -> web.Response:
+        benutzer = request.get("hass_user")
+        gewuenscht = (request.query.get("konto") or "").strip().lower()
+        suche = (request.query.get("q") or "").strip().lower()
+        eintraege = []
+        for a in _abrufer(self.hass):
+            if not a.sichtbar_fuer(benutzer) or (gewuenscht and gewuenscht not in (a.entry.entry_id, a.name.lower())):
+                continue
+            eintraege += [{**e, "wichtig": a.ist_wichtig(e["absender"]), "konto_name": a.name}
+                          for e in a.index.get("archiv", []) if not suche or suche in (e["absender"] or "").lower()]
+        eintraege.sort(key=lambda e: -e["datum"])
+        return self.json({"eintraege": eintraege[:3000]})

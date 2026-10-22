@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from .nachbau import BILD_GROSS, MAIL_EINGEBETTET, MAIL_LATIN1, MAIL_VERLINKT, ImapNachbau, oeffnen_nachbau
+from .nachbau import BILD_GROSS, MAIL_DHL, MAIL_DHL_NEWSLETTER, MAIL_EINGEBETTET, MAIL_LATIN1, MAIL_VERLINKT, ImapNachbau, oeffnen_nachbau
 
 # abruf.py direkt laden (ohne das Paket – das braucht Home Assistant)
 _spec = importlib.util.spec_from_file_location("abruf", Path(__file__).parent.parent / "custom_components" / "briefankuendigung" / "abruf.py")
@@ -74,3 +74,45 @@ def test_server_nicht_erreichbar() -> None:
 ])
 def test_absender(text: str, erwartet: str) -> None:
     assert abruf.brief_absender(text) == erwartet
+
+
+def test_pakete_und_briefe_getrennt() -> None:
+    n = ImapNachbau({101: MAIL_EINGEBETTET, 201: MAIL_DHL, 202: MAIL_DHL_NEWSLETTER})
+    try:
+        geladen: list[str] = []
+        neu, erledigt = abruf.abrufen({**cfg(n.port), "paket_absender": "dhl.de"}, set(), set(), sicher=False, oeffnen=oeffnen_nachbau(geladen))
+    finally:
+        n.stop()
+    arten = {b["art"]: b for b in neu}
+    assert set(arten) == {"brief", "paket"} and len(neu) == 2  # Newsletter ist kein Paket
+    p = arten["paket"]
+    assert p["absender"] == "Thalia Bücher GmbH" and p["sendung"] == "00340434161094015902" and p["stand"] == "heute"
+    assert p["bild"] is None and geladen == []  # keine Werbebilder von DHL
+    assert erledigt == {"INBOX:101", "INBOX:201", "INBOX:202"}  # Newsletter nicht noch einmal ansehen
+
+
+def test_ohne_paket_absender_keine_pakete() -> None:
+    n = ImapNachbau({201: MAIL_DHL})
+    try:
+        neu, _ = abruf.abrufen({**cfg(n.port), "paket_absender": ""}, set(), set(), sicher=False)
+    finally:
+        n.stop()
+    assert neu == []
+
+
+@pytest.mark.parametrize(("text", "erwartet"), [
+    ("Ihr Paket von Amazon EU S.a.r.l. kommt heute zwischen 10 und 13 Uhr. Sendungsnummer JJD000390012345678", ("Amazon EU S.a.r.l", "JJD000390012345678", "heute")),
+    ("Ihre Sendung 00340434161094015902 wurde erfolgreich zugestellt.", ("", "00340434161094015902", "zugestellt")),
+    ("Ihre Sendung von Zalando SE ist unterwegs.", ("Zalando SE", "", "unterwegs")),
+])
+def test_paket_infos(text: str, erwartet: tuple) -> None:
+    i = abruf.paket_infos(text)
+    assert (i["absender"], i["sendung"], i["stand"]) == erwartet
+
+
+def test_wichtig() -> None:
+    liste = "Finanzamt, Gericht , Sparkasse"
+    assert abruf.wichtig("Finanzamt Hamburg-Nord", liste)
+    assert abruf.wichtig("Amtsgericht Wandsbek", liste)
+    assert not abruf.wichtig("Hansemerkur KV AG", liste)
+    assert not abruf.wichtig("", liste) and not abruf.wichtig("Finanzamt", "")

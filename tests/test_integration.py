@@ -22,7 +22,7 @@ DATEN = {"name": "Kim", "benutzer": "kim@gmx.de", "passwort": "geheim", "server"
 
 def eid(hass: HomeAssistant, entry, art: str) -> str:
     """Entitäts-ID über die feste unique_id (der Name hängt von der Sprache ab)."""
-    plattform = "button" if art == "abrufen" else "sensor"
+    plattform = "button" if art == "abrufen" else "binary_sensor" if art == "post_heute" else "sensor"
     e = er.async_get(hass).async_get_entity_id(plattform, DOMAIN, f"{entry.entry_id}_{art}")
     assert e, art
     return e
@@ -142,3 +142,58 @@ async def test_zwei_konten_getrennt(hass: HomeAssistant, hass_client, hass_admin
     assert [k["name"] for k in daten["konten"]] == ["Christian", "Johanna"]  # Christians Konto ist für alle sichtbar
     daten = await (await jc.get("/api/briefankuendigung/briefe?konto=johanna")).json()
     assert [b["absender"] for b in daten["briefe"]] == ["Brief an Johanna"]
+
+
+async def test_pakete_wichtig_ereignis_archiv(hass: HomeAssistant, hass_client, tmp_path) -> None:
+    """1.2: Pakete, wichtige Absender, Ereignis je neuem Brief, „Post heute“ und Archiv mit Suche."""
+    hass.config.config_dir = str(tmp_path)
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de")
+    entry.add_to_hass(hass)
+    jetzt = int(time.time() * 1000)
+    neue = [
+        {"id": "c" * 20, "datum": jetzt - 60_000, "art": "brief", "absender": "Finanzamt Hamburg-Nord", "betreff": "", "bild": None, "bild_typ": None},
+        {"id": "d" * 20, "datum": jetzt - 120_000, "art": "paket", "absender": "Thalia", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "00340434161094015902", "stand": "heute"},
+        {"id": "e" * 20, "datum": jetzt - 3 * 86400_000, "art": "brief", "absender": "AOK", "betreff": "", "bild": None, "bild_typ": None},
+    ]
+    ereignisse = []
+    hass.bus.async_listen("briefankuendigung_neu", lambda e: ereignisse.append(e.data))
+    with patch.object(abruf, "abrufen", return_value=(neue, set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+
+    heute = hass.states.get(eid(hass, entry, "post_heute"))
+    assert heute.state == "on"
+    assert heute.attributes["briefe"] == 1 and heute.attributes["pakete"] == 1 and heute.attributes["wichtig"] == 1
+    assert hass.states.get(eid(hass, entry, "pakete")).state == "1"
+    assert hass.states.get(eid(hass, entry, "briefe")).state == "1"  # AOK ist älter als 3 Tage
+    assert "Finanzamt" not in str(heute.attributes)
+
+    assert len(ereignisse) == 3
+    fa = next(e for e in ereignisse if e["wichtig"])
+    assert fa["konto"] == "Kim" and fa["art"] == "brief" and "absender" not in fa  # Absender nur auf Wunsch
+    assert [e["art"] for e in ereignisse].count("paket") == 1
+
+    client = await hass_client()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    nach = {b["absender"]: b for b in daten["briefe"]}
+    assert nach["Finanzamt Hamburg-Nord"]["wichtig"] is True and nach["Thalia"]["art"] == "paket"
+    assert nach["Thalia"]["sendung"] == "00340434161094015902" and nach["AOK"]["wichtig"] is False
+
+    archiv = await (await client.get("/api/briefankuendigung/archiv")).json()
+    assert [e["absender"] for e in archiv["eintraege"]] == ["Finanzamt Hamburg-Nord", "Thalia", "AOK"]
+    gesucht = await (await client.get("/api/briefankuendigung/archiv", params={"q": "finanz"})).json()
+    assert [e["absender"] for e in gesucht["eintraege"]] == ["Finanzamt Hamburg-Nord"]
+
+    # Absender im Ereignis, wenn erlaubt
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "ereignis_absender": True})
+    await hass.async_block_till_done()
+    ereignisse.clear()
+    neu2 = [{"id": "f" * 20, "datum": jetzt, "art": "brief", "absender": "Sparkasse Holstein", "betreff": "", "bild": None, "bild_typ": None}]
+    with patch.object(abruf, "abrufen", return_value=(neu2, set())):
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+    assert ereignisse and ereignisse[-1]["absender"] == "Sparkasse Holstein" and ereignisse[-1]["wichtig"] is True
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -51,6 +51,33 @@ def brief_absender(text: str) -> str:
     return m.group(1).strip(" „“\"'") if m else ""
 
 
+def paket_infos(text: str) -> dict:
+    """Absender, Sendungsnummer und Stand aus einer DHL-Paketankündigung (so gut es geht)."""
+    t = re.sub(r"\s+", " ", text or "")
+    m = re.search(r"(?:Sendung|Paket|Päckchen|Lieferung)\s+von\s+(.{2,100}?)(?:\s+(?:ist|wird|kommt|wurde|hat|befindet)\s|[,;!](?:\s|$)|\.\s+[A-ZÄÖÜ]|$)", t, re.I) or re.search(
+        r"Absender:\s*(.{2,100}?)(?:\s{2,}|[.,;]|$)", t, re.I
+    )
+    nummer = re.search(r"\b(JJD\d{12,20}|00\d{18}|\d{14}|\d{12}|[A-Z]{2}\d{9}[A-Z]{2})\b", t)
+    if re.search(r"wurde\s.{0,40}zugestellt|ist zugestellt|zugestellt worden|erfolgreich zugestellt|abgeholt", t, re.I):
+        stand = "zugestellt"
+    elif re.search(r"\bheute\b", t, re.I):
+        stand = "heute"
+    else:
+        stand = "unterwegs"
+    return {"absender": m.group(1).strip(" „“\"'.") if m else "", "sendung": nummer.group(1) if nummer else "", "stand": stand}
+
+
+def ist_paket(text: str) -> bool:
+    """Ist es überhaupt eine Sendungsmail (und kein Newsletter)?"""
+    return bool(re.search(r"Sendung|Paket|Päckchen|Zustellung", text or "", re.I))
+
+
+def wichtig(absender: str, stichworte: str) -> bool:
+    """Steht eines der Stichwörter (z. B. „Finanzamt“) im Absender?"""
+    a = (absender or "").lower()
+    return bool(a) and any(w and w in a for w in (x.strip().lower() for x in re.split(r"[,;\n]+", stichworte or "")))
+
+
 def _bild_host_erlaubt(url: str) -> bool:
     try:
         host = (urlparse(url).hostname or "").lower()
@@ -71,8 +98,9 @@ def _lade_bild(url: str, oeffnen=urllib.request.urlopen) -> tuple[bytes, str] | 
         return None
 
 
-def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen) -> dict:
-    """Eine Mail auswerten: id, datum (ms), absender, betreff, bild (bytes|None), bild_typ."""
+def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen, art: str = "brief") -> dict | None:
+    """Eine Mail auswerten: id, datum (ms), art, absender, betreff, bild (bytes|None), bild_typ (+ sendung, stand bei Paketen).
+    Gibt None zurück, wenn eine Paket-Mail gar keine Sendung betrifft (z. B. Newsletter)."""
     msg = email.message_from_bytes(roh, policy=email.policy.default)
     message_id = str(msg.get("Message-ID") or "") or hashlib.sha1(roh).hexdigest()
     bid = hashlib.sha256(message_id.encode()).hexdigest()[:20]
@@ -96,6 +124,17 @@ def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen) -> dict:
             if len(daten) >= BILD_MIN:
                 bilder.append((daten, typ))
 
+    if art == "paket":
+        text = plain_text or ohne_html(html_text)
+        if not ist_paket(text + " " + str(msg.get("Subject") or "")):
+            return None
+        infos = paket_infos(str(msg.get("Subject") or "") + ". " + text)
+        if not infos["absender"]:
+            infos["absender"] = paket_infos(ohne_html(html_text))["absender"]
+        # Bilder in DHL-Mails sind Werbung/Logos – keine Vorschau
+        return {"id": bid, "datum": datum, "art": "paket", "absender": infos["absender"], "betreff": str(msg.get("Subject") or ""),
+                "bild": None, "bild_typ": None, "sendung": infos["sendung"], "stand": infos["stand"]}
+
     absender = brief_absender(plain_text) or brief_absender(ohne_html(html_text))
     bild = max(bilder, key=lambda b: len(b[0])) if bilder else None
     if not bild and html_text:
@@ -111,6 +150,7 @@ def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen) -> dict:
     return {
         "id": bid,
         "datum": datum,
+        "art": "brief",
         "absender": absender,
         "betreff": str(msg.get("Subject") or ""),
         "bild": bild[0] if bild else None,
@@ -152,23 +192,26 @@ def abrufen(
             raise VerbindungsFehler(f"Ordner {ordner} nicht gefunden")
         seit = datetime.now() - timedelta(days=int(cfg.get("tage", 14)))
         datum = f"{seit.day:02d}-{MONATE[seit.month - 1]}-{seit.year}"
-        typ, daten = imap.uid("SEARCH", None, "FROM", _zitat(cfg["absender"]), "SINCE", datum)
-        if typ != "OK":
-            raise VerbindungsFehler("Suche im Postfach fehlgeschlagen")
-        uids = (daten[0] or b"").decode().split() if daten else []
-        for uid in uids[-40:]:
-            schluessel = f"{ordner}:{uid}"
-            if schluessel in erledigt:
-                continue
-            typ, teile = imap.uid("FETCH", uid, "(BODY.PEEK[])")
-            roh = next((t[1] for t in teile or [] if isinstance(t, tuple) and isinstance(t[1], bytes)), None)
-            if typ != "OK" or not roh:
-                continue
-            brief = werte_aus(roh, oeffnen)
-            erledigt.add(schluessel)
-            if brief["id"] not in bekannte_ids:
-                neu.append(brief)
-                bekannte_ids.add(brief["id"])
+        # Briefe von der Post; Pakete von DHL (mehrere Absender mit Komma möglich)
+        quellen = [(cfg["absender"], "brief")] + [(a.strip(), "paket") for a in re.split(r"[,;]+", cfg.get("paket_absender") or "") if a.strip()]
+        for absender, art in quellen:
+            typ, daten = imap.uid("SEARCH", None, "FROM", _zitat(absender), "SINCE", datum)
+            if typ != "OK":
+                raise VerbindungsFehler("Suche im Postfach fehlgeschlagen")
+            uids = (daten[0] or b"").decode().split() if daten else []
+            for uid in uids[-40:]:
+                schluessel = f"{ordner}:{uid}"
+                if schluessel in erledigt:
+                    continue
+                typ, teile = imap.uid("FETCH", uid, "(BODY.PEEK[])")
+                roh = next((t[1] for t in teile or [] if isinstance(t, tuple) and isinstance(t[1], bytes)), None)
+                if typ != "OK" or not roh:
+                    continue
+                brief = werte_aus(roh, oeffnen, art)
+                erledigt.add(schluessel)
+                if brief and brief["id"] not in bekannte_ids:
+                    neu.append(brief)
+                    bekannte_ids.add(brief["id"])
     finally:
         try:
             imap.logout()
