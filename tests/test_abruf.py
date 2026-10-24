@@ -116,3 +116,14 @@ def test_wichtig() -> None:
     assert abruf.wichtig("Amtsgericht Wandsbek", liste)
     assert not abruf.wichtig("Hansemerkur KV AG", liste)
     assert not abruf.wichtig("", liste) and not abruf.wichtig("Finanzamt", "")
+
+
+def test_paket_zusammenfuehren_und_naechster_abruf() -> None:
+    from datetime import datetime
+    a = {"id": "x", "datum": 1000, "stand": "unterwegs", "absender": ""}
+    abruf.paket_zusammenfuehren(a, {"datum": 3000, "stand": "zugestellt", "absender": "Thalia"})
+    abruf.paket_zusammenfuehren(a, {"datum": 2000, "stand": "heute"})
+    assert a["stand"] == "zugestellt" and a["datum"] == 3000 and a["erste"] == 1000 and a["absender"] == "Thalia"
+    assert [v["stand"] for v in a["verlauf"]] == ["unterwegs", "heute", "zugestellt"]
+    assert abruf.naechster_abruf([(2, 0), (5, 0)], datetime(2026, 10, 24, 3, 0)) == datetime(2026, 10, 24, 5, 0)
+    assert abruf.naechster_abruf([(2, 0), (5, 0)], datetime(2026, 10, 24, 22, 0)) == datetime(2026, 10, 25, 2, 0)

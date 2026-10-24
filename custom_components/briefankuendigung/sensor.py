@@ -66,6 +66,7 @@ class BriefeSensor(SensorEntity):
         iso = lambda ms: datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ms else None  # noqa: E731
         return {
             "gesamt": len(meine),
+            "offen": sum(1 for b in meine if not self._abrufer.ist_erledigt(b)),
             "letzte_ankuendigung": iso(meine[0]["datum"]) if meine else None,
             "letzter_abruf": iso(i.get("stand", 0)),
             "fehler": i.get("fehler") or None,

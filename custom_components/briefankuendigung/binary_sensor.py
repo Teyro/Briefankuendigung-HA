@@ -48,4 +48,5 @@ class PostHeute(BinarySensorEntity):
             "briefe": sum(1 for b in heute if b.get("art", "brief") == "brief"),
             "pakete": sum(1 for b in heute if b.get("art") == "paket"),
             "wichtig": sum(1 for b in heute if self._abrufer.ist_wichtig(b["absender"])),
+            "offen": sum(1 for b in heute if not self._abrufer.ist_erledigt(b)),
         }

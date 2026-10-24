@@ -8,6 +8,8 @@ Für das iPhone-Widget gibt es Adressen, die nur mit gültigem Home-Assistant-To
   GET /api/briefankuendigung/briefe        – Liste (JSON)
   GET /api/briefankuendigung/bild/<id>     – Umschlagbild
   GET /api/briefankuendigung/archiv        – Archiv der letzten zwei Jahre (Datum, Absender, Art)
+  POST /api/briefankuendigung/erledigt     – {"id", "erledigt"}: Brief als angekommen markieren (gilt auf allen Geräten)
+  POST /api/briefankuendigung/abrufen      – Postfach jetzt lesen (höchstens einmal pro Minute)
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ class BriefAbruf:
         self.hass = hass
         self.entry = entry
         self.ordner = hass.config.path(DOMAIN, entry.entry_id)
-        self.index: dict = {"stand": 0, "fehler": "", "briefe": [], "uids": [], "archiv": []}
+        self.index: dict = {"stand": 0, "fehler": "", "briefe": [], "uids": [], "archiv": [], "erledigt": {}}
         self.laeuft = False
 
     @property
@@ -76,6 +78,19 @@ class BriefAbruf:
         """Heute angekündigte Briefe und Pakete (nach Ortszeit)."""
         tag = dt_util.now().date()
         return [b for b in self.index["briefe"] if dt_util.as_local(dt_util.utc_from_timestamp(b["datum"] / 1000)).date() == tag]
+
+    def zeiten(self) -> list[tuple[int, int]]:
+        return zeiten_lesen(self.cfg.get(CONF_ZEITEN, ""))
+
+    def naechster_abruf(self) -> int:
+        return int(abruf.naechster_abruf(self.zeiten(), dt_util.now()).timestamp() * 1000)
+
+    def ist_erledigt(self, b: dict) -> bool:
+        """Als angekommen markiert – oder ein zugestelltes Paket."""
+        return b["id"] in self.index.get("erledigt", {}) or (b.get("art") == "paket" and b.get("stand") == "zugestellt")
+
+    def offen(self) -> list[dict]:
+        return [b for b in self.index["briefe"] if not self.ist_erledigt(b)]
 
     def sichtbar_fuer(self, benutzer) -> bool:
         """Darf dieser Home-Assistant-Benutzer das Konto sehen? Leere Liste = alle."""
@@ -96,13 +111,24 @@ class BriefAbruf:
         archiv = self.index.setdefault("archiv", [])
         bekannt = {a["id"] for a in archiv}
         for b in neue:
+            # Weitere Mail zu einer bekannten Sendung (unterwegs → heute → zugestellt): denselben Eintrag aktualisieren
+            if b.get("art") == "paket" and b.get("sendung"):
+                alt = next((x for x in self.index["briefe"] if x.get("art") == "paket" and x.get("sendung") == b["sendung"]), None)
+                if alt:
+                    abruf.paket_zusammenfuehren(alt, b)
+                    for a in archiv:
+                        if a.get("sendung") == b["sendung"]:
+                            a["datum"] = alt["datum"]
+                            a["absender"] = a["absender"] or alt["absender"]
+                    continue
             eintrag = {k: b[k] for k in ("id", "datum", "absender", "betreff")}
             eintrag["art"] = b.get("art", "brief")
             for k in ("sendung", "stand"):
                 if b.get(k):
                     eintrag[k] = b[k]
             if b["id"] not in bekannt:
-                archiv.append({"id": b["id"], "datum": b["datum"], "absender": b["absender"], "art": eintrag["art"]})
+                archiv.append({"id": b["id"], "datum": b["datum"], "absender": b["absender"], "art": eintrag["art"],
+                               **({"sendung": b["sendung"]} if b.get("sendung") else {})})
             eintrag["bild"] = None
             if b.get("bild"):
                 datei = f"{b['id']}.{ENDUNG.get(b['bild_typ'], 'jpg')}"
@@ -119,12 +145,30 @@ class BriefAbruf:
                 except OSError:
                     pass
         self.index["briefe"] = sorted((x for x in self.index["briefe"] if x["datum"] >= grenze), key=lambda x: -x["datum"])
+        ids = {x["id"] for x in self.index["briefe"]}
+        self.index["erledigt"] = {k: v for k, v in self.index.get("erledigt", {}).items() if k in ids}
         archiv_grenze = (time.time() - ARCHIV_TAGE * 86400) * 1000
         self.index["archiv"] = sorted((a for a in archiv if a["datum"] >= archiv_grenze), key=lambda a: -a["datum"])[:3000]
+        self._index_schreiben()
+
+    def _index_schreiben(self) -> None:
         tmp = os.path.join(self.ordner, "index.json.neu")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.index, f, ensure_ascii=False)
         os.replace(tmp, os.path.join(self.ordner, "index.json"))
+
+    async def async_erledigt(self, brief_id: str, erledigt: bool) -> bool:
+        """Brief als angekommen markieren (oder zurücknehmen). False, wenn es ihn in diesem Konto nicht gibt."""
+        if not any(b["id"] == brief_id for b in self.index["briefe"]):
+            return False
+        e = self.index.setdefault("erledigt", {})
+        if erledigt:
+            e[brief_id] = int(time.time() * 1000)
+        else:
+            e.pop(brief_id, None)
+        await self.hass.async_add_executor_job(self._index_schreiben)
+        async_dispatcher_send(self.hass, f"{SIGNAL_NEU}_{self.entry.entry_id}")
+        return True
 
     def bild(self, bild_id: str) -> tuple[bytes, str] | None:
         b = next((x for x in self.index["briefe"] if x["id"] == bild_id and x.get("bild")), None)
@@ -176,6 +220,7 @@ class BriefAbruf:
         for b in sorted(neue, key=lambda x: x["datum"]):
             daten = {
                 "konto": self.name, "konto_id": self.entry.entry_id, "art": b.get("art", "brief"),
+                **({"stand": b["stand"]} if b.get("stand") else {}),
                 "wichtig": self.ist_wichtig(b["absender"]),
                 "datum": dt_util.utc_from_timestamp(b["datum"] / 1000).isoformat(),
             }
@@ -195,9 +240,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(BriefeAnsicht(hass))
         hass.http.register_view(BildAnsicht(hass))
         hass.http.register_view(ArchivAnsicht(hass))
+        hass.http.register_view(ErledigtAnsicht(hass))
+        hass.http.register_view(AbrufenAnsicht(hass))
         daten["_ansichten"] = True
 
-    for stunde, minute in zeiten_lesen(abrufer.cfg.get(CONF_ZEITEN, "")):
+    for stunde, minute in abrufer.zeiten():
         entry.async_on_unload(async_track_time_change(hass, abrufer.async_abrufen, hour=stunde, minute=minute, second=0))
     # gleich nach dem Start einmal abrufen, damit etwas da ist
     entry.async_on_unload(async_call_later(hass, timedelta(seconds=15), abrufer.async_abrufen))
@@ -243,15 +290,16 @@ class BriefeAnsicht(HomeAssistantView):
                 continue
             if gewuenscht and gewuenscht not in (a.entry.entry_id, a.name.lower()):
                 continue
-            konto = {"id": a.entry.entry_id, "name": a.name, "stand": a.index.get("stand", 0), "fehler": a.index.get("fehler", "")}
+            konto = {"id": a.entry.entry_id, "name": a.name, "stand": a.index.get("stand", 0), "fehler": a.index.get("fehler", ""),
+                     "zeiten": [f"{h:02d}:{m:02d}" for h, m in a.zeiten()], "naechster_abruf": a.naechster_abruf(), "laeuft": a.laeuft}
             konten.append(konto)
             briefe += [{**b, "art": b.get("art", "brief"), "bild": bool(b.get("bild")), "wichtig": a.ist_wichtig(b["absender"]),
-                        "konto": a.entry.entry_id, "konto_name": a.name} for b in a.index["briefe"]]
+                        "erledigt": a.ist_erledigt(b), "konto": a.entry.entry_id, "konto_name": a.name} for b in a.index["briefe"]]
             stand = max(stand, konto["stand"])
             fehler = fehler or (f"{a.name}: {konto['fehler']}" if konto["fehler"] else "")
         briefe.sort(key=lambda b: -b["datum"])
         konten.sort(key=lambda k: k["name"].lower())
-        return self.json({"stand": stand, "fehler": fehler, "konten": konten, "briefe": briefe})
+        return self.json({"stand": stand, "fehler": fehler, "konten": konten, "briefe": briefe, "version": 2})
 
 
 class BildAnsicht(HomeAssistantView):
@@ -299,3 +347,54 @@ class ArchivAnsicht(HomeAssistantView):
                           for e in a.index.get("archiv", []) if not suche or suche in (e["absender"] or "").lower()]
         eintraege.sort(key=lambda e: -e["datum"])
         return self.json({"eintraege": eintraege[:3000]})
+
+
+class ErledigtAnsicht(HomeAssistantView):
+    """Brief als angekommen markieren: POST {"id": "<20 hex>", "erledigt": true|false} – gilt für alle Geräte."""
+
+    url = "/api/briefankuendigung/erledigt"
+    name = "api:briefankuendigung:erledigt"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            daten = await request.json()
+        except ValueError:
+            return self.json_message("Ungültige Anfrage", 400)
+        if not isinstance(daten, dict):
+            return self.json_message("Ungültige Anfrage", 400)
+        brief_id = str(daten.get("id") or "")
+        if not re.fullmatch(r"[0-9a-f]{20}", brief_id):
+            return self.json_message("Ungültige ID", 400)
+        benutzer = request.get("hass_user")
+        for a in _abrufer(self.hass):
+            if a.sichtbar_fuer(benutzer) and await a.async_erledigt(brief_id, bool(daten.get("erledigt", True))):
+                return self.json({"id": brief_id, "erledigt": bool(daten.get("erledigt", True))})
+        return self.json_message("Brief nicht gefunden", 404)
+
+
+class AbrufenAnsicht(HomeAssistantView):
+    """Postfach jetzt lesen (für „Jetzt nachsehen“ im Widget). ?konto= filtert; höchstens einmal pro Minute je Konto."""
+
+    url = "/api/briefankuendigung/abrufen"
+    name = "api:briefankuendigung:abrufen"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        benutzer = request.get("hass_user")
+        gewuenscht = (request.query.get("konto") or "").strip().lower()
+        gestartet = 0
+        for a in _abrufer(self.hass):
+            if not a.sichtbar_fuer(benutzer) or (gewuenscht and gewuenscht not in (a.entry.entry_id, a.name.lower())):
+                continue
+            if a.laeuft or time.time() * 1000 - a.index.get("stand", 0) < 60_000:
+                continue
+            self.hass.async_create_task(a.async_abrufen())
+            gestartet += 1
+        return self.json({"gestartet": gestartet}, status_code=202 if gestartet else 200)

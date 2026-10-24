@@ -197,3 +197,55 @@ async def test_pakete_wichtig_ereignis_archiv(hass: HomeAssistant, hass_client, 
         await hass.async_block_till_done()
     assert ereignisse and ereignisse[-1]["absender"] == "Sparkasse Holstein" and ereignisse[-1]["wichtig"] is True
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_sendung_zusammen_erledigt_abrufen(hass: HomeAssistant, hass_client, tmp_path) -> None:
+    """1.3: mehrere Mails zu einer Sendung = ein Eintrag; „Angekommen“ gilt für alle Geräte; Abruf aus dem Widget."""
+    hass.config.config_dir = str(tmp_path)
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de")
+    entry.add_to_hass(hass)
+    jetzt = int(time.time() * 1000)
+    paket = {"art": "paket", "absender": "Thalia", "betreff": "", "bild": None, "bild_typ": None, "sendung": "00340434161094015902"}
+    erste = [{**paket, "id": "1" * 20, "datum": jetzt - 7200_000, "stand": "unterwegs"},
+             {"id": "2" * 20, "datum": jetzt - 3600_000, "art": "brief", "absender": "AOK", "betreff": "", "bild": None, "bild_typ": None}]
+    with patch.object(abruf, "abrufen", return_value=(erste, set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+    zweite = [{**paket, "id": "3" * 20, "datum": jetzt - 600_000, "stand": "zugestellt", "absender": ""}]
+    with patch.object(abruf, "abrufen", return_value=(zweite, set())):
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+
+    client = await hass_client()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    pakete = [b for b in daten["briefe"] if b["art"] == "paket"]
+    assert len(pakete) == 1 and pakete[0]["stand"] == "zugestellt" and pakete[0]["absender"] == "Thalia"
+    assert [v["stand"] for v in pakete[0]["verlauf"]] == ["unterwegs", "zugestellt"] and pakete[0]["erledigt"] is True
+    assert daten["konten"][0]["zeiten"] == ["02:00", "05:00"] and daten["konten"][0]["naechster_abruf"] > jetzt
+    archiv = await (await client.get("/api/briefankuendigung/archiv")).json()
+    assert [e["absender"] for e in archiv["eintraege"]].count("Thalia") == 1
+
+    # Angekommen markieren: Liste und Sensor zeigen es
+    r = await client.post("/api/briefankuendigung/erledigt", json={"id": "2" * 20, "erledigt": True})
+    assert r.status == 200
+    await hass.async_block_till_done()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    assert next(b for b in daten["briefe"] if b["id"] == "2" * 20)["erledigt"] is True
+    assert hass.states.get(eid(hass, entry, "briefe")).attributes["offen"] == 0
+    assert (await client.post("/api/briefankuendigung/erledigt", json={"id": "f" * 20})).status == 404
+    assert (await client.post("/api/briefankuendigung/erledigt", json={"id": "../x"})).status == 400
+    await client.post("/api/briefankuendigung/erledigt", json={"id": "2" * 20, "erledigt": False})
+    assert hass.states.get(eid(hass, entry, "briefe")).attributes["offen"] == 1
+
+    # Jetzt abrufen: direkt nach einem Abruf nicht noch einmal, sonst ja
+    with patch.object(abruf, "abrufen", return_value=([], set())) as aufruf:
+        r = await client.post("/api/briefankuendigung/abrufen")
+        assert (await r.json())["gestartet"] == 0
+        hass.data[DOMAIN][entry.entry_id].index["stand"] = 0
+        r = await client.post("/api/briefankuendigung/abrufen")
+        assert r.status == 202 and (await r.json())["gestartet"] == 1
+        await hass.async_block_till_done()
+        assert aufruf.called
+    assert await hass.config_entries.async_unload(entry.entry_id)

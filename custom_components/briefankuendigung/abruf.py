@@ -222,3 +222,29 @@ def abrufen(
 
 def _zitat(s: str) -> str:
     return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def paket_zusammenfuehren(alt: dict, neu: dict) -> None:
+    """Weitere Mail zu einer schon bekannten Sendung: Stand und Verlauf aktualisieren statt eines zweiten Eintrags.
+    Die neueste Mail bestimmt den Stand; „datum“ wird zur Zeit der letzten Meldung (sortiert die Sendung nach oben)."""
+    verlauf = alt.get("verlauf") or [{"stand": alt.get("stand") or "unterwegs", "datum": alt["datum"]}]
+    if not any(v["datum"] == neu["datum"] and v["stand"] == neu.get("stand") for v in verlauf):
+        verlauf.append({"stand": neu.get("stand") or "unterwegs", "datum": neu["datum"]})
+    verlauf.sort(key=lambda v: v["datum"])
+    alt["verlauf"] = verlauf[-10:]
+    alt["erste"] = min(alt.get("erste") or alt["datum"], verlauf[0]["datum"])
+    alt["stand"] = verlauf[-1]["stand"]
+    alt["datum"] = max(alt["datum"], neu["datum"])
+    if not alt.get("absender") and neu.get("absender"):
+        alt["absender"] = neu["absender"]
+
+
+def naechster_abruf(zeiten: list[tuple[int, int]], jetzt: datetime) -> datetime:
+    """Nächster eingestellter Abrufzeitpunkt nach jetzt (gleiche Zeitzone wie jetzt)."""
+    kandidaten = []
+    for tag in (0, 1):
+        for h, m in zeiten:
+            t = (jetzt + timedelta(days=tag)).replace(hour=h, minute=m, second=0, microsecond=0)
+            if t > jetzt:
+                kandidaten.append(t)
+    return min(kandidaten)
