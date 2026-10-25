@@ -181,3 +181,26 @@ def oeffnen_nachbau(geladen: list[str]):
         geladen.append(req.full_url)
         return Antwort(os.urandom(30000) if "deutschepost" in req.full_url else os.urandom(50))
     return oeffnen
+
+
+def _mail(von: str, an: str, betreff: str, datum: str, mid: str, text: str) -> bytes:
+    return "\r\n".join([f"From: {von}", f"To: {an}", f"Subject: {betreff}", f"Date: {datum}", f"Message-ID: <{mid}>",
+                        "Content-Type: text/plain; charset=utf-8", "", text, ""]).encode()
+
+
+MAIL_HERMES = _mail("Hermes <noreply@paketankuendigung.myhermes.de>", "kim@gmx.de", "Ihre Hermes Sendung ist unterwegs",
+                    "Wed, 21 Oct 2026 06:10:00 +0200", "h1@myhermes.de",
+                    "Hallo Kim, Ihre Sendung von OTTO GmbH & Co KG ist unterwegs. Voraussichtliche Zustellung: 23.10.2026 "
+                    "zwischen 10:00 und 13:00 Uhr. Sendungsnummer: H1002345678901234567")
+MAIL_DPD = _mail("DPD <noreply@dpd.de>", "kim@gmx.de", "Ihr DPD Paket kommt heute",
+                 "Wed, 21 Oct 2026 07:20:00 +0200", "d1@dpd.de",
+                 "Ihr Paket von Zalando SE kommt heute zwischen 9:30 und 10:30. Paketnummer 01234567890123")
+MAIL_AMAZON_1 = _mail("Amazon.de <versandbestaetigung@amazon.de>", "kim@gmx.de", "Versandt: „Kindle Paperwhite (16 GB)“",
+                      "Tue, 20 Oct 2026 18:00:00 +0200", "a1@amazon.de",
+                      "Hallo Kim, Ihr Paket mit „Kindle Paperwhite (16 GB)“ wurde versandt. Lieferung: Donnerstag, 22. Oktober. "
+                      "Bestellnr. 302-1234567-7654321. Sendungsnummer: TBA301234567890")
+MAIL_AMAZON_2 = _mail("Amazon.de <shipment-tracking@amazon.de>", "johanna.k@gmx.de", "Zugestellt: „Kaffeebohnen 1 kg“",
+                      "Wed, 21 Oct 2026 14:00:00 +0200", "a2@amazon.de",
+                      "Ihr Paket mit „Kaffeebohnen 1 kg“ wurde zugestellt. Tracking-ID: TBA309999999999")
+MAIL_AMAZON_WERBUNG = _mail("Amazon.de <store-news@amazon.de>", "kim@gmx.de", "Angebote der Woche",
+                            "Wed, 21 Oct 2026 09:00:00 +0200", "a3@amazon.de", "Entdecken Sie unsere Angebote und Gutscheine.")

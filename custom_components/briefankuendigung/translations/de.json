@@ -15,9 +15,12 @@
           "absender": "Absender der Ankündigungen",
           "ordner": "Ordner (INBOX = Posteingang)",
           "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)",
-          "paket_absender": "Absender der Paketankündigungen (DHL; leer = keine Pakete)",
+          "paket_absender": "Weitere Absender von Paket-Mails (z. B. ein Shop; mit Komma getrennt)",
           "wichtig": "Wichtige Absender (Stichwörter, mit Komma getrennt)",
-          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)"
+          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)",
+          "paketdienste": "Paketdienste (deren Mails werden gelesen)",
+          "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
+          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)"
         }
       }
     },
@@ -40,9 +43,12 @@
           "absender": "Absender der Ankündigungen",
           "ordner": "Ordner (INBOX = Posteingang)",
           "ha_benutzer": "Sichtbar für (Home-Assistant-Benutzer; nichts gewählt = alle)",
-          "paket_absender": "Absender der Paketankündigungen (DHL; leer = keine Pakete)",
+          "paket_absender": "Weitere Absender von Paket-Mails (z. B. ein Shop; mit Komma getrennt)",
           "wichtig": "Wichtige Absender (Stichwörter, mit Komma getrennt)",
-          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)"
+          "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)",
+          "paketdienste": "Paketdienste (deren Mails werden gelesen)",
+          "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
+          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)"
         }
       }
     }
@@ -64,6 +70,30 @@
     "binary_sensor": {
       "post_heute": {
         "name": "Post heute"
+      }
+    }
+  },
+  "services": {
+    "sendung_hinzufuegen": {
+      "name": "Sendung hinzufügen",
+      "description": "Eine Sendung per Nummer verfolgen (DHL, Hermes, DPD oder Amazon). Spätere Mails dazu aktualisieren sie.",
+      "fields": {
+        "nummer": {
+          "name": "Sendungsnummer",
+          "description": "Sendungs- bzw. Bestellnummer"
+        },
+        "dienst": {
+          "name": "Paketdienst",
+          "description": "Leer = an der Nummer erkennen"
+        },
+        "name": {
+          "name": "Name",
+          "description": "z. B. Absender oder Inhalt"
+        },
+        "konto": {
+          "name": "Postfach",
+          "description": "Name des Postfachs (leer = das erste)"
+        }
       }
     }
   }

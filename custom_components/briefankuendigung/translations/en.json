@@ -15,9 +15,12 @@
           "absender": "Sender of the announcements",
           "ordner": "Folder (INBOX = inbox)",
           "ha_benutzer": "Visible to (Home Assistant users; none selected = all)",
-          "paket_absender": "Sender of parcel announcements (DHL; empty = no parcels)",
+          "paket_absender": "Additional senders of parcel mails (e.g. a shop; comma separated)",
           "wichtig": "Important senders (keywords, comma-separated)",
-          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)"
+          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)",
+          "paketdienste": "Parcel services (their mails are read)",
+          "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
+          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)"
         }
       }
     },
@@ -40,9 +43,12 @@
           "absender": "Sender of the announcements",
           "ordner": "Folder (INBOX = inbox)",
           "ha_benutzer": "Visible to (Home Assistant users; none selected = all)",
-          "paket_absender": "Sender of parcel announcements (DHL; empty = no parcels)",
+          "paket_absender": "Additional senders of parcel mails (e.g. a shop; comma separated)",
           "wichtig": "Important senders (keywords, comma-separated)",
-          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)"
+          "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)",
+          "paketdienste": "Parcel services (their mails are read)",
+          "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
+          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)"
         }
       }
     }
@@ -64,6 +70,30 @@
     "binary_sensor": {
       "post_heute": {
         "name": "Mail today"
+      }
+    }
+  },
+  "services": {
+    "sendung_hinzufuegen": {
+      "name": "Add shipment",
+      "description": "Track a shipment by number (DHL, Hermes, DPD or Amazon). Later mails about it update it.",
+      "fields": {
+        "nummer": {
+          "name": "Tracking number",
+          "description": "Tracking or order number"
+        },
+        "dienst": {
+          "name": "Parcel service",
+          "description": "Empty = detect from the number"
+        },
+        "name": {
+          "name": "Name",
+          "description": "e.g. sender or content"
+        },
+        "konto": {
+          "name": "Mailbox",
+          "description": "Name of the mailbox (empty = the first)"
+        }
       }
     }
   }

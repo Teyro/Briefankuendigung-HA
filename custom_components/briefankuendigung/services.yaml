@@ -1,0 +1,26 @@
+sendung_hinzufuegen:
+  fields:
+    nummer:
+      required: true
+      example: "00340434161094015902"
+      selector:
+        text:
+    dienst:
+      required: false
+      selector:
+        select:
+          options:
+            - dhl
+            - hermes
+            - dpd
+            - amazon
+    name:
+      required: false
+      example: "Neue Schuhe"
+      selector:
+        text:
+    konto:
+      required: false
+      example: "Johanna"
+      selector:
+        text:

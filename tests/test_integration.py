@@ -249,3 +249,59 @@ async def test_sendung_zusammen_erledigt_abrufen(hass: HomeAssistant, hass_clien
         await hass.async_block_till_done()
         assert aufruf.called
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_paketdienste_kundenkonten_von_hand_dhl(hass: HomeAssistant, hass_client, aioclient_mock, tmp_path) -> None:
+    """1.4: DHL, Hermes, DPD, Amazon; Kundenkonten; Sendung von Hand; DHL-Sendungsverfolgung."""
+    hass.config.config_dir = str(tmp_path)
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de",
+                            options={"paketdienste": ["dhl", "hermes", "dpd", "amazon"], "kundenkonten": "johanna.k@gmx.de = Johanna",
+                                     "dhl_api_schluessel": "geheim"})
+    entry.add_to_hass(hass)
+    jetzt = int(time.time() * 1000)
+    neue = [
+        {"id": "1" * 20, "datum": jetzt - 3600_000, "art": "paket", "absender": "OTTO", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "H1002345678901234567", "stand": "unterwegs", "dienst": "hermes", "erwartet": "2026-10-23", "zeitfenster": "10:00–13:00", "empfaenger": "kim@gmx.de"},
+        {"id": "2" * 20, "datum": jetzt - 1800_000, "art": "paket", "absender": "Kaffeebohnen 1 kg", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "TBA309999999999", "stand": "unterwegs", "dienst": "amazon", "erwartet": "", "zeitfenster": "", "empfaenger": "johanna.k@gmx.de"},
+    ]
+    aioclient_mock.get("https://api-eu.dhl.com/track/shipments", json={"shipments": [
+        {"status": {"statusCode": "transit", "description": "Die Sendung wurde in das Zustellfahrzeug geladen."}, "estimatedTimeOfDelivery": "2026-10-21T12:00:00Z"}]})
+    with patch.object(abruf, "abrufen", return_value=(neue, set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+
+    client = await hass_client()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    assert daten["version"] == 3 and daten["dienste"]["dpd"] == "DPD" and daten["konten"][0]["dhl_live"] is True
+    nach = {b["id"]: b for b in daten["briefe"]}
+    assert nach["1" * 20]["dienst_name"] == "Hermes" and nach["1" * 20]["verfolgen"].startswith("https://www.myhermes.de/")
+    assert nach["2" * 20]["kundenkonto"] == "Johanna" and nach["1" * 20]["kundenkonto"] == ""
+
+    # Von Hand: Amazon an der Nummer erkannt; 14 Ziffern nur mit Dienst
+    r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "TBA301234567890", "name": "Kindle"})
+    assert r.status == 200 and (await r.json())["dienst"] == "amazon"
+    assert (await client.post("/api/briefankuendigung/sendung", json={"nummer": "01234567890123"})).status == 400
+    r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "00340434161094015902", "dienst": "dhl", "name": "Thalia"})
+    dhl = await r.json()
+    assert dhl["dienst"] == "dhl" and dhl["manuell"] is True
+    await hass.services.async_call(DOMAIN, "sendung_hinzufuegen", {"nummer": "01234567890123", "dienst": "dpd"}, blocking=True)
+    pakete = hass.states.get(eid(hass, entry, "pakete"))
+    assert pakete.attributes["nach_dienst"] == {"amazon": 2, "dhl": 1, "dpd": 1, "hermes": 1}, pakete.attributes
+
+    # DHL-Sendungsverfolgung: Stand und Termin übernommen
+    await hass.data[DOMAIN][entry.entry_id].async_dhl_aktualisieren()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    d = next(b for b in daten["briefe"] if b["id"] == dhl["id"])
+    assert d["stand"] == "heute" and d["erwartet"] == "2026-10-21" and "Zustellfahrzeug" in d["status_text"]
+    assert aioclient_mock.mock_calls[0][3]["DHL-API-Key"] == "geheim"
+
+    # Entfernen: von Hand → weg; aus einer Mail → nur angekommen
+    assert (await client.post("/api/briefankuendigung/sendung/entfernen", json={"id": dhl["id"]})).status == 200
+    assert (await client.post("/api/briefankuendigung/sendung/entfernen", json={"id": "1" * 20})).status == 200
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    nach = {b["id"]: b for b in daten["briefe"]}
+    assert dhl["id"] not in nach and nach["1" * 20]["erledigt"] is True
+    assert await hass.config_entries.async_unload(entry.entry_id)

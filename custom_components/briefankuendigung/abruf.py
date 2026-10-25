@@ -16,8 +16,17 @@ import re
 import ssl
 import urllib.request
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from urllib.parse import urlparse
+
+try:
+    from . import pakete
+except ImportError:  # einzeln geladen (Tests ohne Home Assistant)
+    import importlib.util as _iu
+    import pathlib as _pl
+    _spec = _iu.spec_from_file_location("pakete", _pl.Path(__file__).with_name("pakete.py"))
+    pakete = _iu.module_from_spec(_spec)
+    _spec.loader.exec_module(pakete)
 
 BILD_MIN = 4000  # kleinere Bilder sind Logos und Zählpixel
 ERLAUBTE_BILD_HOSTS = ("deutschepost.de", "dhl.de", "deutschepost.com", "dpdhl.com")
@@ -98,7 +107,7 @@ def _lade_bild(url: str, oeffnen=urllib.request.urlopen) -> tuple[bytes, str] | 
         return None
 
 
-def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen, art: str = "brief") -> dict | None:
+def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen, art: str = "brief", dienst: str = "") -> dict | None:
     """Eine Mail auswerten: id, datum (ms), art, absender, betreff, bild (bytes|None), bild_typ (+ sendung, stand bei Paketen).
     Gibt None zurück, wenn eine Paket-Mail gar keine Sendung betrifft (z. B. Newsletter)."""
     msg = email.message_from_bytes(roh, policy=email.policy.default)
@@ -125,15 +134,21 @@ def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen, art: str = "brief") ->
                 bilder.append((daten, typ))
 
     if art == "paket":
+        betreff = str(msg.get("Subject") or "")
         text = plain_text or ohne_html(html_text)
-        if not ist_paket(text + " " + str(msg.get("Subject") or "")):
+        if not pakete.ist_sendung(betreff + " " + text):
             return None
-        infos = paket_infos(str(msg.get("Subject") or "") + ". " + text)
+        dienst = dienst or pakete.dienst_von_absender(str(msg.get("From") or "")) or "dhl"
+        tag = datetime.fromtimestamp(datum / 1000).date()
+        infos = pakete.infos(betreff + ". " + text, dienst, tag)
         if not infos["absender"]:
-            infos["absender"] = paket_infos(ohne_html(html_text))["absender"]
-        # Bilder in DHL-Mails sind Werbung/Logos – keine Vorschau
-        return {"id": bid, "datum": datum, "art": "paket", "absender": infos["absender"], "betreff": str(msg.get("Subject") or ""),
-                "bild": None, "bild_typ": None, "sendung": infos["sendung"], "stand": infos["stand"]}
+            infos["absender"] = pakete.absender(ohne_html(html_text), dienst)
+        # Empfänger (für mehrere Kundenkonten, z. B. zwei Amazon-Konten in einem Postfach)
+        an = [a.lower() for _, a in getaddresses([str(msg.get("To") or ""), str(msg.get("Delivered-To") or "")]) if "@" in a]
+        # Bilder in Paket-Mails sind Werbung/Logos – keine Vorschau
+        return {"id": bid, "datum": datum, "art": "paket", "absender": infos["absender"], "betreff": betreff,
+                "bild": None, "bild_typ": None, "sendung": infos["sendung"], "stand": infos["stand"], "dienst": dienst,
+                "erwartet": infos["erwartet"], "zeitfenster": infos["zeitfenster"], "empfaenger": an[0] if an else ""}
 
     absender = brief_absender(plain_text) or brief_absender(ohne_html(html_text))
     bild = max(bilder, key=lambda b: len(b[0])) if bilder else None
@@ -192,9 +207,9 @@ def abrufen(
             raise VerbindungsFehler(f"Ordner {ordner} nicht gefunden")
         seit = datetime.now() - timedelta(days=int(cfg.get("tage", 14)))
         datum = f"{seit.day:02d}-{MONATE[seit.month - 1]}-{seit.year}"
-        # Briefe von der Post; Pakete von DHL (mehrere Absender mit Komma möglich)
-        quellen = [(cfg["absender"], "brief")] + [(a.strip(), "paket") for a in re.split(r"[,;]+", cfg.get("paket_absender") or "") if a.strip()]
-        for absender, art in quellen:
+        # Briefe von der Post; Pakete von den gewählten Diensten (DHL, Hermes, DPD, Amazon) und eigenen Absendern
+        quellen = [(cfg["absender"], "brief", "")] + paket_quellen(cfg)
+        for absender, art, dienst in quellen:
             typ, daten = imap.uid("SEARCH", None, "FROM", _zitat(absender), "SINCE", datum)
             if typ != "OK":
                 raise VerbindungsFehler("Suche im Postfach fehlgeschlagen")
@@ -207,7 +222,7 @@ def abrufen(
                 roh = next((t[1] for t in teile or [] if isinstance(t, tuple) and isinstance(t[1], bytes)), None)
                 if typ != "OK" or not roh:
                     continue
-                brief = werte_aus(roh, oeffnen, art)
+                brief = werte_aus(roh, oeffnen, art, dienst)
                 erledigt.add(schluessel)
                 if brief and brief["id"] not in bekannte_ids:
                     neu.append(brief)
@@ -237,6 +252,23 @@ def paket_zusammenfuehren(alt: dict, neu: dict) -> None:
     alt["datum"] = max(alt["datum"], neu["datum"])
     if not alt.get("absender") and neu.get("absender"):
         alt["absender"] = neu["absender"]
+    for k in ("erwartet", "zeitfenster", "dienst", "empfaenger"):
+        if neu.get(k) and (k != "dienst" or not alt.get(k)):
+            alt[k] = neu[k]
+
+
+def paket_quellen(cfg: dict) -> list[tuple[str, str, str]]:
+    """(Absender, "paket", Dienst) für die IMAP-Suche. Ohne Einstellung „paketdienste“ (bis 1.3): alle Dienste,
+    außer der alte Paket-Absender war leer (= keine Pakete)."""
+    dienste = cfg.get("paketdienste")
+    alt = [a.strip() for a in re.split(r"[,;]+", cfg.get("paket_absender") or "") if a.strip()]
+    if dienste is None:
+        dienste = pakete.ALLE if alt else []
+    quellen = [(a, "paket", d) for d in dienste if d in pakete.DIENSTE for a in pakete.DIENSTE[d]["absender"]]
+    bekannt = {q[0] for q in quellen}
+    # eigene Absender (z. B. ein Shop), die zu keinem Dienst gehören
+    quellen += [(a, "paket", pakete.dienst_von_absender(a)) for a in alt if a not in bekannt and not pakete.dienst_von_absender(a)]
+    return quellen
 
 
 def naechster_abruf(zeiten: list[tuple[int, int]], jetzt: datetime) -> datetime:
