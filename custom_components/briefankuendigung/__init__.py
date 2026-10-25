@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from datetime import timedelta
 from functools import partial
 
@@ -159,7 +160,9 @@ class BriefAbruf:
         self._index_schreiben()
 
     def _index_schreiben(self) -> None:
-        tmp = os.path.join(self.ordner, "index.json.neu")
+        # eigener Name je Schreibvorgang: zwei gleichzeitige Speicherungen (z. B. Sendung + DHL-Abfrage) stören sich nicht
+        os.makedirs(self.ordner, exist_ok=True)
+        tmp = os.path.join(self.ordner, f"index.json.{uuid.uuid4().hex}.neu")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.index, f, ensure_ascii=False)
         os.replace(tmp, os.path.join(self.ordner, "index.json"))

@@ -66,7 +66,7 @@ def cfg(port: int, **mehr) -> dict:
             "absender": "ankuendigung@brief.deutschepost.de", **mehr}
 
 
-def test_alle_dienste_aus_dem_postfach() -> None:
+def test_alle_dienste_aus_dem_postfach(socket_enabled) -> None:
     n = ImapNachbau({1: MAIL_DHL, 2: MAIL_HERMES, 3: MAIL_DPD, 4: MAIL_AMAZON_1, 5: MAIL_AMAZON_2, 6: MAIL_AMAZON_WERBUNG})
     try:
         neu, erledigt = abruf.abrufen(cfg(n.port, paketdienste=["dhl", "hermes", "dpd", "amazon"]), set(), set(), sicher=False)
@@ -85,7 +85,7 @@ def test_alle_dienste_aus_dem_postfach() -> None:
     assert len(erledigt) == 6
 
 
-def test_nur_gewaehlte_dienste() -> None:
+def test_nur_gewaehlte_dienste(socket_enabled) -> None:
     n = ImapNachbau({2: MAIL_HERMES, 3: MAIL_DPD})
     try:
         neu, _ = abruf.abrufen(cfg(n.port, paketdienste=["dpd"]), set(), set(), sicher=False)
