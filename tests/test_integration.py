@@ -344,8 +344,7 @@ async def test_siebzehn_mitteilungen_umbenennen(hass: HomeAssistant, hass_client
     await a.async_siebzehn_aktualisieren()
     await hass.async_block_till_done()
 
-    daten = await (await client.get("/api/briefankuendigung/briefe"))
-    daten = await daten.json()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
     nach = {b["id"]: b for b in daten["briefe"]}
     h, u = nach[hermes["id"]], nach[ups["id"]]
     assert h["stand"] == "heute" and h["erwartet"] == "2026-10-21" and h["status_text"] == "Die Sendung ist in der Zustellung."
