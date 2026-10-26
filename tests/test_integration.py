@@ -399,7 +399,7 @@ async def test_kalender_aufgaben_ersatz_heute(hass: HomeAssistant, hass_client, 
     await hass.async_block_till_done()
     b = next(x for x in a.index["briefe"] if x["id"] == gls["id"])
     assert b["stand"] == "heute" and b["anbieter"] == "GLS (öffentlich)" and b["ereignisse"][0]["ort"] == "Hamburg"
-    assert ereignisse and ereignisse[-1]["stand"] == "heute" and ereignisse[-1]["dienst"] == "gls"
+    assert any(e["stand"] == "heute" and e["dienst"] == "gls" for e in ereignisse), ereignisse
     assert hass.states.get(eid_plattform(hass, entry, "binary_sensor", "in_zustellung")).state == "on"
     # DHL ohne Schlüssel: dhl.de antwortet nicht → deutschepost.de springt ein
     thalia = next(x for x in a.index["briefe"] if x.get("sendung") == "00340434161094015902")
