@@ -14,7 +14,8 @@ from .sensor import geraet
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    async_add_entities([PostHeute(hass.data[DOMAIN][entry.entry_id], entry)])
+    abrufer = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([PostHeute(abrufer, entry), InZustellung(abrufer, entry)])
 
 
 class PostHeute(BinarySensorEntity):
@@ -50,3 +51,29 @@ class PostHeute(BinarySensorEntity):
             "wichtig": sum(1 for b in heute if self._abrufer.ist_wichtig(b["absender"])),
             "offen": sum(1 for b in heute if not self._abrufer.ist_erledigt(b)),
         }
+
+
+class InZustellung(PostHeute):
+    """An, solange ein Paket in Zustellung ist (bzw. heute kommt) – z. B. für eine Lampe an der Haustür"""
+    _attr_translation_key = "in_zustellung"
+    _attr_icon = "mdi:truck-fast"
+
+    def __init__(self, abrufer, entry: ConfigEntry) -> None:
+        super().__init__(abrufer, entry)
+        self._attr_unique_id = f"{entry.entry_id}_in_zustellung"
+
+    def _heute(self) -> list[dict]:
+        from homeassistant.util import dt as dt_util
+        tag = dt_util.now().date().isoformat()
+        return [b for b in self._abrufer.index["briefe"] if b.get("art") == "paket" and not self._abrufer.ist_erledigt(b)
+                and b.get("stand") != "zugestellt" and (b.get("stand") == "heute" or b.get("erwartet") == tag)]
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._heute())
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        h = self._heute()
+        return {"anzahl": len(h), "dienste": sorted({b.get("dienst") or "dhl" for b in h}),
+                "zeitfenster": [b["zeitfenster"] for b in h if b.get("zeitfenster")]}

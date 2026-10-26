@@ -16,7 +16,7 @@ from homeassistant.helpers.selector import (
 from . import abruf
 from .const import (
     CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_DIENSTE, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN,
-    CONF_NAME, CONF_SIEBZEHN,
+    CONF_NAME, CONF_OEFFENTLICH, CONF_SHIP24, CONF_SIEBZEHN, CONF_UPS_GEHEIM, CONF_UPS_ID,
     CONF_ORDNER, CONF_PAKET, CONF_PASSWORT, CONF_PORT, CONF_SERVER, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, STANDARD,
 )
 from .pakete import ALLE as ALLE_DIENSTE, DIENSTE
@@ -49,6 +49,10 @@ def _optionen_schema(v: dict, benutzer: list[SelectOptionDict], melder: list[str
         vol.Optional(CONF_KUNDENKONTEN, default=v.get(CONF_KUNDENKONTEN, "")): TextSelector(TextSelectorConfig(multiline=True)),
         vol.Optional(CONF_DHL_SCHLUESSEL, default=v.get(CONF_DHL_SCHLUESSEL, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         vol.Optional(CONF_SIEBZEHN, default=v.get(CONF_SIEBZEHN, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_SHIP24, default=v.get(CONF_SHIP24, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_UPS_ID, default=v.get(CONF_UPS_ID, "")): str,
+        vol.Optional(CONF_UPS_GEHEIM, default=v.get(CONF_UPS_GEHEIM, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_OEFFENTLICH, default=v.get(CONF_OEFFENTLICH, True)): BooleanSelector(),
         vol.Optional(CONF_MITTEILEN, default=v.get(CONF_MITTEILEN, [])): SelectSelector(
             SelectSelectorConfig(options=sorted(set((melder or []) + list(v.get(CONF_MITTEILEN, [])))), multiple=True, custom_value=True)),
         vol.Optional(CONF_PAKET, default=v.get(CONF_PAKET, STANDARD[CONF_PAKET])): str,

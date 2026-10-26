@@ -36,3 +36,8 @@ STANDARD = {
     CONF_WICHTIG: "Finanzamt, Gericht, Staatsanwaltschaft, Polizei, Bußgeld, Inkasso, Rentenversicherung, Krankenkasse, Jobcenter, Agentur für Arbeit, Bezirksamt, Behörde, Bank, Sparkasse, Versicherung",
     CONF_EREIGNIS_ABSENDER: False,
 }
+CONF_UPS_ID = "ups_client_id"     # optional: UPS-Entwicklerzugang (developer.ups.com)
+CONF_UPS_GEHEIM = "ups_client_secret"
+CONF_SHIP24 = "ship24_schluessel"  # optional: Schlüssel der Ship24-API (Ersatz für 17TRACK)
+CONF_OEFFENTLICH = "oeffentliche_seiten"  # öffentliche Sendungsverfolgung von GLS und DPD als Notnagel
+EREIGNIS_PAKET = f"{DOMAIN}_paket"  # je neuem Paket-Stand: id, name, dienst, stand, vorher

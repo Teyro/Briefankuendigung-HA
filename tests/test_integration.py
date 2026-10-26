@@ -367,3 +367,73 @@ async def test_siebzehn_mitteilungen_umbenennen(hass: HomeAssistant, hass_client
     assert next(b for b in daten["briefe"] if b["id"] == hermes["id"])["name"] == "Neue Schuhe"
     assert (await client.post("/api/briefankuendigung/sendung/name", json={"id": "f" * 20, "name": "x"})).status == 404
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_kalender_aufgaben_ersatz_heute(hass: HomeAssistant, hass_client, aioclient_mock, tmp_path) -> None:
+    """1.6: Kalender, Aufgabenliste, Paket in Zustellung, Ersatz-Anbieter (Ship24, GLS öffentlich), Aktion heute, Ereignis."""
+    from homeassistant.util import dt as dt_util
+    hass.config.config_dir = str(tmp_path)
+    ereignisse = []
+    hass.bus.async_listen("briefankuendigung_paket", lambda e: ereignisse.append(e.data))
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de",
+                            options={"paketdienste": ["dhl", "gls", "dpd"], "ship24_schluessel": "s24", "oeffentliche_seiten": True})
+    entry.add_to_hass(hass)
+    heute = dt_util.now().date().isoformat()
+    aioclient_mock.get("https://gls-group.eu/app/service/open/rest/DE/de/rstt001", json={"tuStatus": [{"progressBar": {"statusInfo": "INDELIVERY"},
+        "history": [{"date": heute, "time": "07:00:00", "evtDscr": "Das Paket ist in Zustellung.", "address": {"city": "Hamburg"}}]}]})
+    aioclient_mock.post("https://api.ship24.com/public/v1/trackers/track", status=429)
+    aioclient_mock.get("https://www.dhl.de/int-verfolgen/data/search", status=503)
+    aioclient_mock.get("https://www.deutschepost.de/int-verfolgen/data/search", json={"sendungen": [{"sendungsdetails": {
+        "istZugestellt": False, "sendungsverlauf": {"status": "Die Sendung liegt in der Packstation zur Abholung bereit.", "events": [
+            {"datum": "2026-10-19T14:13:52+02:00", "status": "Die Sendung liegt in der Packstation zur Abholung bereit."}]}}}]})
+    with patch.object(abruf, "abrufen", return_value=([], set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    a = hass.data[DOMAIN][entry.entry_id]
+    gls = await a.async_sendung_hinzufuegen("73012345678", "gls", "Manufactum")
+    await a.async_sendung_hinzufuegen("00340434161094015902", "dhl", "Thalia")
+    a.index["briefe"][[b["id"] for b in a.index["briefe"]].index(pakete_id(a, "00340434161094015902"))]["erwartet"] = "2099-01-02"
+
+    # Ersatz: Ship24 überlastet (429) → öffentliche GLS-Seite
+    await a.async_ersatz_aktualisieren()
+    await hass.async_block_till_done()
+    b = next(x for x in a.index["briefe"] if x["id"] == gls["id"])
+    assert b["stand"] == "heute" and b["anbieter"] == "GLS (öffentlich)" and b["ereignisse"][0]["ort"] == "Hamburg"
+    assert any(e["stand"] == "heute" and e["dienst"] == "gls" for e in ereignisse), ereignisse
+    assert hass.states.get(eid_plattform(hass, entry, "binary_sensor", "in_zustellung")).state == "on"
+    # DHL ohne Schlüssel: dhl.de antwortet nicht → deutschepost.de springt ein
+    thalia = next(x for x in a.index["briefe"] if x.get("sendung") == "00340434161094015902")
+    assert thalia["stand"] == "abholbereit" and thalia["anbieter"] == "DHL (ohne Schlüssel)"
+
+    # Kalender: Termin am 2.1.2099
+    kal = eid_plattform(hass, entry, "calendar", "lieferungen")
+    antwort = await hass.services.async_call("calendar", "get_events", {"entity_id": kal, "start_date_time": "2099-01-01 00:00:00",
+                                                                         "end_date_time": "2099-01-03 00:00:00"}, blocking=True, return_response=True)
+    assert [e["summary"] for e in antwort[kal]["events"]] == ["📦 Thalia (DHL)"]
+
+    # Aufgabenliste: abhaken = angekommen, neuer Eintrag = verfolgen
+    liste = eid_plattform(hass, entry, "todo", "paketliste")
+    await hass.services.async_call("todo", "update_item", {"entity_id": liste, "item": gls["id"], "status": "completed"}, blocking=True)
+    assert a.ist_erledigt(next(x for x in a.index["briefe"] if x["id"] == gls["id"]))
+    await hass.services.async_call("todo", "add_item", {"entity_id": liste, "item": "1Z999AA10123456784 Fahrrad"}, blocking=True)
+    assert any(x.get("sendung") == "1Z999AA10123456784" and x.get("absender") == "Fahrrad" for x in a.index["briefe"])
+
+    # Aktion heute (für den Sprachassistenten)
+    r = await hass.services.async_call(DOMAIN, "heute", {}, blocking=True, return_response=True)
+    assert r["pakete_heute"] == 1 and "Thalia" in r["text"], r
+
+    # Dashboard-Karte wird ausgeliefert
+    client = await hass_client()
+    karte = await client.get("/briefankuendigung/paketbote-card.js")
+    assert karte.status == 200 and "paketbote-card" in await karte.text()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def pakete_id(a, nummer: str) -> str:
+    return next(b["id"] for b in a.index["briefe"] if b.get("sendung") == nummer)
+
+
+def eid_plattform(hass: HomeAssistant, entry, plattform: str, art: str) -> str:
+    e = er.async_get(hass).async_get_entity_id(plattform, DOMAIN, f"{entry.entry_id}_{art}")
+    assert e, art
+    return e

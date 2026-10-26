@@ -43,17 +43,24 @@ from homeassistant.util import dt as dt_util
 from . import abruf, pakete
 from .const import (
     ARCHIV_TAGE, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
-    CONF_SIEBZEHN, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS, SIGNAL_NEU, STANDARD,
+    CONF_OEFFENTLICH, CONF_SHIP24, CONF_SIEBZEHN, CONF_TAGE, CONF_UPS_GEHEIM, CONF_UPS_ID, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS,
+    EREIGNIS_PAKET, SIGNAL_NEU, STANDARD,
 )
 
 PAKET_FELDER = ("sendung", "stand", "dienst", "erwartet", "zeitfenster", "empfaenger", "manuell", "status_text")
 DHL_API = "https://api-eu.dhl.com/track/shipments"
 SIEBZEHN_API = "https://api.17track.net/track/v2.2"
+UPS_API = "https://onlinetools.ups.com"
+SHIP24_API = "https://api.ship24.com/public/v1/trackers/track"
+GLS_SEITEN = ("https://gls-group.com/app/service/open/rest/DE/de/rstt001", "https://gls-group.eu/app/service/open/rest/DE/de/rstt001")
+DHL_SEITEN = ("https://www.dhl.de/int-verfolgen/data/search", "https://www.deutschepost.de/int-verfolgen/data/search")
+DPD_SEITE = "https://tracking.dpd.de/rest/plc/de_DE/"
+BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Briefankuendigung/1.6"
 PAKET_TAGE = 60          # nicht zugestellte Pakete so lange behalten (auch wenn keine Mail mehr kommt)
 MELDEN = {"heute": "📦 Kommt heute", "abholbereit": "📦 Zur Abholung bereit", "zugestellt": "📦 Zugestellt", "problem": "⚠️ Problem mit der Sendung"}
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.CALENDAR, Platform.TODO]
 ENDUNG = {"image/png": "png", "image/gif": "gif", "image/webp": "webp"}
 
 
@@ -206,6 +213,8 @@ class BriefAbruf:
             self.hass.async_create_task(self.async_dhl_aktualisieren())
         elif dienst in pakete.SIEBZEHN and self.cfg.get(CONF_SIEBZEHN):
             self.hass.async_create_task(self.async_siebzehn_aktualisieren())
+        # ohne Schlüssel (bzw. als Ersatz) gleich einmal nachfragen
+        self.hass.async_create_task(self.async_ersatz_aktualisieren())
         return b
 
     async def async_sendung_entfernen(self, brief_id: str) -> bool:
@@ -241,15 +250,20 @@ class BriefAbruf:
             except Exception as e:  # noqa: BLE001 – ohne Netz einfach beim nächsten Mal
                 _LOGGER.debug("Briefankündigung: DHL-Abfrage %s: %s", b["sendung"], e)
                 continue
-            if st and self._live_uebernehmen(b, st):
+            if st and self._live_uebernehmen(b, st, "DHL"):
                 geaendert = True
         if geaendert:
             await self._speichern_jetzt()
 
-    def _live_uebernehmen(self, b: dict, st: dict) -> bool:
-        """Stand aus DHL bzw. 17TRACK übernehmen; bei neuem Stand Bescheid geben. True, wenn sich etwas geändert hat."""
+    def _live_uebernehmen(self, b: dict, st: dict, quelle: str = "") -> bool:
+        """Stand eines Anbieters (DHL, 17TRACK, UPS, Ship24, GLS, DPD) übernehmen; bei neuem Stand Bescheid geben.
+        True, wenn sich etwas geändert hat."""
         geaendert = False
         vorher = b.get("stand")
+        b["live_zeit"] = int(time.time() * 1000)
+        if quelle and b.get("anbieter") != quelle:
+            b["anbieter"] = quelle
+            geaendert = True
         if st["stand"] != vorher or (st.get("erwartet") and st["erwartet"] != b.get("erwartet")):
             abruf.paket_zusammenfuehren(b, {"datum": int(time.time() * 1000), "stand": st["stand"], "erwartet": st.get("erwartet", "")})
             geaendert = True
@@ -268,7 +282,120 @@ class BriefAbruf:
                 self._mitteilen(b, "problem")
         if b.get("stand") != vorher:
             self._mitteilen(b, b["stand"])
+            self._stand_ereignis(b, vorher)
         return geaendert
+
+    @callback
+    def _stand_ereignis(self, b: dict, vorher: str | None) -> None:
+        """Ereignis briefankuendigung_paket: neuer Stand einer Sendung (für Automationen, z. B. Licht an bei „heute“)"""
+        self.hass.bus.async_fire(EREIGNIS_PAKET, {
+            "konto": self.name, "id": b["id"], "dienst": b.get("dienst") or "dhl", "stand": b.get("stand"), "vorher": vorher or "",
+            "erwartet": b.get("erwartet") or "",
+            **({"name": b.get("name") or b.get("absender") or ""} if self.cfg.get(CONF_EREIGNIS_ABSENDER) else {}),
+        })
+
+    async def async_ersatz_aktualisieren(self, *_args) -> None:
+        """Ersatz, wenn DHL bzw. 17TRACK nichts liefern (kein Schlüssel, Kontingent leer, Nummer unbekannt):
+        DHL ohne Schlüssel (dhl.de, ersatzweise deutschepost.de) → UPS (eigener Zugang) → Ship24 (Schlüssel) →
+        öffentliche Seiten von GLS und DPD. Höchstens 10 Sendungen je Lauf."""
+        cfg = self.cfg
+        jetzt = int(time.time() * 1000)
+        offen = [b for b in self.index["briefe"] if b.get("art") == "paket" and b.get("sendung") and b.get("stand") != "zugestellt"
+                 and b["id"] not in self.index.get("erledigt", {}) and jetzt - int(b.get("live_zeit") or 0) > 50 * 60_000
+                 and not self._hat_hauptquelle(b)][:10]
+        if not offen:
+            return
+        sitzung = async_get_clientsession(self.hass)
+        ups_token: str | None = None
+
+        async def holen(methode: str, url: str, **kw):
+            try:
+                async with sitzung.request(methode, url, timeout=20, **kw) as r:
+                    if r.status != 200:
+                        return None
+                    return await r.json(content_type=None)
+            except Exception as e:  # noqa: BLE001 – beim nächsten Mal
+                _LOGGER.debug("Briefankündigung: %s: %s", url, e)
+                return None
+
+        geaendert = False
+        for b in offen:
+            dienst, nr = b.get("dienst") or "dhl", b["sendung"]
+            versuche = []
+            if cfg.get(CONF_OEFFENTLICH, True) and dienst == "dhl":
+                versuche.append("DHL (ohne Schlüssel)")
+            if dienst == "ups" and cfg.get(CONF_UPS_ID) and cfg.get(CONF_UPS_GEHEIM):
+                versuche.append("UPS")
+            if cfg.get(CONF_SHIP24) and dienst != "amazon":
+                versuche.append("Ship24")
+            if cfg.get(CONF_OEFFENTLICH, True) and dienst in ("gls", "dpd"):
+                versuche.append(dienst.upper() + " (öffentlich)")
+            for v in versuche:
+                st = None
+                if v == "DHL (ohne Schlüssel)":
+                    for url in DHL_SEITEN:
+                        st = pakete.dhl_oeffentlich_status(await holen("GET", url, params={"piececode": nr, "language": "de"},
+                                                                       headers={"User-Agent": BROWSER, "Accept": "application/json"}) or {})
+                        if st:
+                            break
+                elif v == "UPS":
+                    if ups_token is None:
+                        import aiohttp
+                        t = await holen("POST", f"{UPS_API}/security/v1/oauth/token", data={"grant_type": "client_credentials"},
+                                        auth=aiohttp.BasicAuth(cfg[CONF_UPS_ID], cfg[CONF_UPS_GEHEIM]))
+                        ups_token = (t or {}).get("access_token") or ""
+                    if ups_token:
+                        j = await holen("GET", f"{UPS_API}/api/track/v1/details/{nr}", params={"locale": "de_DE"},
+                                        headers={"Authorization": f"Bearer {ups_token}", "transId": uuid.uuid4().hex, "transactionSrc": "Briefankuendigung"})
+                        try:
+                            st = pakete.ups_status(j["trackResponse"]["shipment"][0]["package"][0])
+                        except (KeyError, IndexError, TypeError):
+                            st = None
+                elif v == "Ship24":
+                    j = await holen("POST", SHIP24_API, json={"trackingNumber": nr},
+                                    headers={"Authorization": f"Bearer {cfg[CONF_SHIP24]}", "Content-Type": "application/json"})
+                    try:
+                        st = pakete.ship24_status(j["data"]["trackings"][0])
+                    except (KeyError, IndexError, TypeError):
+                        st = None
+                elif dienst == "gls":
+                    for url in GLS_SEITEN:
+                        st = pakete.gls_status(await holen("GET", url, params={"match": nr}, headers={"User-Agent": BROWSER}) or {})
+                        if st:
+                            break
+                else:
+                    st = pakete.dpd_status(await holen("GET", DPD_SEITE + nr, headers={"User-Agent": BROWSER}) or {})
+                if st and (st.get("ereignisse") or st.get("text")):
+                    if self._live_uebernehmen(b, st, v):
+                        geaendert = True
+                    break
+        if geaendert:
+            await self._speichern_jetzt()
+
+    def _hat_hauptquelle(self, b: dict) -> bool:
+        """Wird die Sendung schon über den DHL-Schlüssel bzw. 17TRACK verfolgt? (dann kein Ersatz – spart Kontingent)"""
+        d = b.get("dienst") or "dhl"
+        if d == "dhl" and self.cfg.get(CONF_DHL_SCHLUESSEL) and b.get("anbieter") in ("DHL", None, ""):
+            return bool(b.get("ereignisse"))
+        return bool(self.cfg.get(CONF_SIEBZEHN)) and b.get("t17") == 1 and bool(b.get("ereignisse"))
+
+    def heute_text(self) -> dict:
+        """Für Sprachassistent und Automationen: was heute kommt (Satz und Liste)"""
+        heute = dt_util.now().date().isoformat()
+        offen = [b for b in self.index["briefe"] if b.get("art") == "paket" and not self.ist_erledigt(b) and b.get("stand") != "zugestellt"]
+        h = [b for b in offen if b.get("stand") in ("heute", "abholbereit") or b.get("erwartet") == heute]
+        namen = [f"{b.get('name') or b.get('absender') or 'Paket'} ({pakete.DIENSTE.get(b.get('dienst') or 'dhl', {}).get('name', '')})" for b in h]
+        if not h:
+            satz = "Heute kommt kein Paket." + (f" Unterwegs sind {len(offen)}." if offen else "")
+        elif len(h) == 1:
+            satz = f"Heute kommt ein Paket: {namen[0]}."
+        else:
+            satz = f"Heute kommen {len(h)} Pakete: {', '.join(namen[:-1])} und {namen[-1]}."
+        briefe = len([b for b in self.heute() if b.get("art", "brief") == "brief"])
+        if briefe:
+            satz += f" Dazu {'ein Brief' if briefe == 1 else f'{briefe} Briefe'}."
+        return {"text": satz, "pakete_heute": len(h), "unterwegs": len(offen), "briefe_heute": briefe,
+                "liste": [{"name": n, "stand": b.get("stand"), "zeitfenster": b.get("zeitfenster") or ""} for n, b in zip(namen, h)]}
 
     async def async_siebzehn_aktualisieren(self, *_args) -> None:
         """Offene Sendungen (Hermes, DPD, GLS, UPS; DHL ohne eigenen DHL-Schlüssel) über 17TRACK verfolgen.
@@ -331,7 +458,7 @@ class BriefAbruf:
                 b = next((y for y in teil if st and y["sendung"] == st["nummer"]), None)
                 if not b:
                     continue
-                if self._live_uebernehmen(b, st):
+                if self._live_uebernehmen(b, st, "17TRACK"):
                     geaendert = True
                 if st["ende"]:
                     beenden.append(b)
@@ -442,6 +569,7 @@ class BriefAbruf:
                     b = next((x for x in self.index["briefe"] if x["id"] == n["id"] or (n.get("sendung") and x.get("sendung") == n["sendung"])), None)
                     if b and b.get("stand") == n["stand"] and not self.ist_erledigt(b):
                         self._mitteilen(b, n["stand"])
+                        self._stand_ereignis(b, None)
 
     @callback
     def _melden(self, neue: list[dict]) -> None:
@@ -478,6 +606,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(SendungNameAnsicht(hass))
         daten["_ansichten"] = True
         _dienste_anmelden(hass)
+        await _karte_anmelden(hass)
 
     for stunde, minute in abrufer.zeiten():
         entry.async_on_unload(async_track_time_change(hass, abrufer.async_abrufen, hour=stunde, minute=minute, second=0))
@@ -491,6 +620,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if abrufer.cfg.get(CONF_SIEBZEHN):
         entry.async_on_unload(async_track_time_interval(hass, abrufer.async_siebzehn_aktualisieren, timedelta(hours=1)))
         entry.async_on_unload(async_call_later(hass, timedelta(seconds=90), abrufer.async_siebzehn_aktualisieren))
+    # Ersatz (UPS, Ship24, öffentliche Seiten): stündlich – fragt nur Sendungen, zu denen seit 3 Stunden nichts kam
+    entry.async_on_unload(async_track_time_interval(hass, abrufer.async_ersatz_aktualisieren, timedelta(hours=1)))
+    entry.async_on_unload(async_call_later(hass, timedelta(seconds=150), abrufer.async_ersatz_aktualisieren))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_neu_laden))
@@ -655,6 +787,7 @@ def _fuer_api(a: BriefAbruf, b: dict) -> dict:
         erg["verfolgen"] = pakete.verfolgen(erg["dienst"], b.get("sendung", ""))
         erg["kundenkonto"] = a.kundenkonto(b)
         erg.pop("t17", None)
+        erg.pop("live_zeit", None)
     return erg
 
 
@@ -760,9 +893,42 @@ def _dienste_anmelden(hass: HomeAssistant) -> None:
         except ValueError as e:
             raise ServiceValidationError("Paketdienst nicht erkannt – bitte angeben" if str(e) == "dienst" else "Ungültige Sendungsnummer") from e
 
+    from homeassistant.core import ServiceResponse, SupportsResponse
+
+    async def heute(aufruf: ServiceCall) -> ServiceResponse:
+        """Was kommt heute? (Satz für den Sprachassistenten, Zahlen und Liste)"""
+        k = aufruf.data.get("konto", "").strip().lower()
+        alle = [x for x in _abrufer(hass) if not k or k in (x.entry.entry_id, x.name.lower())]
+        if not alle:
+            raise ServiceValidationError("Kein Postfach eingerichtet")
+        erg = [a.heute_text() for a in alle]
+        if len(erg) == 1:
+            return erg[0]
+        return {"text": " ".join(f"{a.name}: {e['text']}" for a, e in zip(alle, erg)),
+                "pakete_heute": sum(e["pakete_heute"] for e in erg), "unterwegs": sum(e["unterwegs"] for e in erg),
+                "briefe_heute": sum(e["briefe_heute"] for e in erg), "liste": [x for e in erg for x in e["liste"]]}
+
+    hass.services.async_register(DOMAIN, "heute", heute, schema=vol.Schema({vol.Optional("konto", default=""): cv.string}),
+                                 supports_response=SupportsResponse.ONLY)
+
     hass.services.async_register(DOMAIN, "sendung_hinzufuegen", hinzufuegen, schema=vol.Schema({
         vol.Required("nummer"): cv.string,
         vol.Optional("dienst", default=""): vol.In(["", *pakete.ALLE]),
         vol.Optional("name", default=""): cv.string,
         vol.Optional("konto", default=""): cv.string,
     }))
+
+
+KARTE_URL = "/briefankuendigung/paketbote-card.js"
+
+
+async def _karte_anmelden(hass: HomeAssistant) -> None:
+    """Dashboard-Karte „Pakete“ (custom:paketbote-card) – ohne zusätzliche Installation"""
+    try:
+        from homeassistant.components.frontend import add_extra_js_url
+        from homeassistant.components.http import StaticPathConfig
+        pfad = os.path.join(os.path.dirname(__file__), "www", "paketbote-card.js")
+        await hass.http.async_register_static_paths([StaticPathConfig(KARTE_URL, pfad, False)])
+        add_extra_js_url(hass, f"{KARTE_URL}?v=1.6.0")
+    except Exception as e:  # noqa: BLE001 – ohne Karte geht der Rest trotzdem
+        _LOGGER.warning("Briefankündigung: Dashboard-Karte nicht angemeldet: %s", e)

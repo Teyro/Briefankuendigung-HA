@@ -22,7 +22,11 @@
           "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
           "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)",
           "siebzehn_schluessel": "17TRACK key (optional, api.17track.net – live status for Hermes, DPD, GLS, UPS; the free quota is a one-time 200 shipments)",
-          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)"
+          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)",
+          "ship24_schluessel": "Ship24 key (optional, fallback for 17TRACK)",
+          "ups_client_id": "UPS client ID (optional, developer.ups.com)",
+          "ups_client_secret": "UPS client secret",
+          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)"
         }
       }
     },
@@ -52,7 +56,11 @@
           "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
           "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)",
           "siebzehn_schluessel": "17TRACK key (optional, api.17track.net – live status for Hermes, DPD, GLS, UPS; the free quota is a one-time 200 shipments)",
-          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)"
+          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)",
+          "ship24_schluessel": "Ship24 key (optional, fallback for 17TRACK)",
+          "ups_client_id": "UPS client ID (optional, developer.ups.com)",
+          "ups_client_secret": "UPS client secret",
+          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)"
         }
       }
     }
@@ -74,6 +82,19 @@
     "binary_sensor": {
       "post_heute": {
         "name": "Mail today"
+      },
+      "in_zustellung": {
+        "name": "Parcel out for delivery"
+      }
+    },
+    "calendar": {
+      "lieferungen": {
+        "name": "Deliveries"
+      }
+    },
+    "todo": {
+      "paketliste": {
+        "name": "Parcels"
       }
     }
   },
@@ -97,6 +118,16 @@
         "konto": {
           "name": "Mailbox",
           "description": "Name of the mailbox (empty = the first)"
+        }
+      }
+    },
+    "heute": {
+      "name": "What arrives today?",
+      "description": "Sentence for the voice assistant and counts: parcels today, on the way, letters today.",
+      "fields": {
+        "konto": {
+          "name": "Mailbox",
+          "description": "Name or ID (empty = all)"
         }
       }
     }

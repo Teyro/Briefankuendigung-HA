@@ -1,0 +1,70 @@
+blueprint:
+  name: "Pakete: Ansage oder Mitteilung bei neuem Stand"
+  description: >-
+    Meldet „kommt heute“, „zur Abholung bereit“ oder „zugestellt“ über einen Benachrichtigungsdienst oder
+    sagt es auf einem Lautsprecher an (Ereignis briefankuendigung_paket, Integration ab 1.6).
+  domain: automation
+  source_url: https://github.com/Teyro/Briefankuendigung-HA/blob/main/blueprints/automation/briefankuendigung/paket_ansage.yaml
+  input:
+    staende:
+      name: Bei diesen Ständen
+      default: [heute, abholbereit, zugestellt]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: kommt heute
+              value: heute
+            - label: zur Abholung bereit
+              value: abholbereit
+            - label: zugestellt
+              value: zugestellt
+    lautsprecher:
+      name: Lautsprecher (optional, Text-zu-Sprache)
+      default: []
+      selector:
+        entity:
+          domain: media_player
+          multiple: true
+    tts:
+      name: Sprachdienst (bei Lautsprechern)
+      default: tts.home_assistant_cloud
+      selector:
+        entity:
+          domain: tts
+    mitteilung:
+      name: Benachrichtigungsdienst (optional, z. B. notify.mobile_app_iphone)
+      default: ""
+      selector:
+        text:
+triggers:
+  - trigger: event
+    event_type: briefankuendigung_paket
+conditions:
+  - "{{ trigger.event.data.stand in staende }}"
+variables:
+  staende: !input staende
+  lautsprecher: !input lautsprecher
+  mitteilung: !input mitteilung
+  text: >-
+    {% set n = trigger.event.data.name | default('Ein Paket', true) %}
+    {% set d = {'dhl':'DHL','hermes':'Hermes','dpd':'DPD','gls':'GLS','ups':'UPS','amazon':'Amazon'}.get(trigger.event.data.dienst, '') %}
+    {{ n }}{{ ' von ' ~ d if d }} {{ {'heute':'kommt heute','abholbereit':'liegt zur Abholung bereit','zugestellt':'wurde zugestellt'}[trigger.event.data.stand] }}.
+actions:
+  - if:
+      - "{{ lautsprecher | count > 0 }}"
+    then:
+      - action: tts.speak
+        target:
+          entity_id: !input tts
+        data:
+          media_player_entity_id: "{{ lautsprecher }}"
+          message: "{{ text }}"
+  - if:
+      - "{{ mitteilung | length > 0 }}"
+    then:
+      - action: "{{ mitteilung }}"
+        data:
+          title: "📦 Paket"
+          message: "{{ text }}"
+mode: queued

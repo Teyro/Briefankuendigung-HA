@@ -1,0 +1,50 @@
+blueprint:
+  name: "Pakete: Licht an, solange ein Paket in Zustellung ist"
+  description: >-
+    Schaltet ein Licht (z. B. an der Haustür) ein, solange der Sensor „Paket in Zustellung“ an ist –
+    so sieht der Zusteller, dass jemand da ist. Nur in der eingestellten Zeit.
+  domain: automation
+  source_url: https://github.com/Teyro/Briefankuendigung-HA/blob/main/blueprints/automation/briefankuendigung/paket_in_zustellung_licht.yaml
+  input:
+    sensor:
+      name: Paket in Zustellung
+      selector:
+        entity:
+          filter:
+            - integration: briefankuendigung
+              domain: binary_sensor
+    licht:
+      name: Licht
+      selector:
+        target:
+          entity:
+            domain: light
+    von:
+      name: Ab
+      default: "07:00:00"
+      selector:
+        time:
+    bis:
+      name: Bis
+      default: "20:00:00"
+      selector:
+        time:
+triggers:
+  - trigger: state
+    entity_id: !input sensor
+conditions:
+  - condition: time
+    after: !input von
+    before: !input bis
+actions:
+  - if:
+      - condition: state
+        entity_id: !input sensor
+        state: "on"
+    then:
+      - action: light.turn_on
+        target: !input licht
+    else:
+      - action: light.turn_off
+        target: !input licht
+mode: restart
