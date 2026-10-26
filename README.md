@@ -13,8 +13,10 @@ das die angekündigten Briefe als Vorschau zeigt.
   markiert oder gelöscht
 - Sensoren **Angekündigte Briefe** / **Angekündigte Pakete** (Anzahl der letzten 3 Tage, ohne Namen), **Post heute**
   (an, wenn heute etwas angekündigt ist; Anzahl Briefe, Pakete, wichtige) und Knopf **Jetzt abrufen**
-- **Pakete:** DHL-Paketankündigungen werden mitgelesen (Absender `dhl.de`, abschaltbar) – mit Absender,
-  Sendungsnummer und Stand (unterwegs / heute / zugestellt)
+- **Pakete von DHL, Hermes, DPD und Amazon:** Die Versandmails der Dienste werden mitgelesen (in den Optionen
+  wählbar) – mit Absender bzw. Artikel, Sendungsnummer, Stand (unterwegs / heute / zur Abholung bereit /
+  zugestellt), voraussichtlicher Zustellung samt Zeitfenster und Link zur Sendungsverfolgung des Dienstes.
+  Siehe [Pakete](#pakete)
 - **Wichtige Absender:** Stichwörter wie „Finanzamt, Gericht, Bank“ (in den Optionen) – solche Briefe sind
   im Widget hervorgehoben und werden extra gemeldet
 - **Ereignis `briefankuendigung_neu`** je neuem Brief/Paket (für Automationen, siehe unten)
@@ -47,6 +49,35 @@ bekommt ein eigenes Gerät („Briefankündigung Christian“, „Briefankündig
 die das Postfach sehen dürfen (nichts gewählt = alle). Johanna legt mit **ihrem eigenen** Home-Assistant-Benutzer
 ein Zugriffstoken an und trägt es in ihrem Widget ein – dann sieht sie nur ihre Briefe (und Postfächer ohne
 Einschränkung). Die Adresse `/api/briefankuendigung/briefe?konto=johanna` liefert nur ein Postfach.
+
+## Pakete
+
+Unter *Konfigurieren* → **Paketdienste** die Dienste wählen, deren Mails gelesen werden (DHL, Hermes, DPD,
+Amazon). Weitere Absender (z. B. ein Shop, der selbst verschickt) gehen unter *Weitere Absender von Paket-Mails*.
+Gelesen werden nur Versand- und Zustellmails – keine Werbung und keine Bestellbestätigungen. Mehrere Mails zur
+selben Sendung ergeben einen Eintrag mit Verlauf.
+
+**Mehrere Amazon-Konten:**
+
+- **Landen alle Mails in einem Postfach** (z. B. über Weiterleitung oder Aliasse), unter **Kundenkonten** je
+  Zeile Adresse und Namen eintragen, z. B. `johanna.k@gmx.de = Johanna`. Dann steht an jedem Paket, für wen es
+  ist (Feld `kundenkonto`).
+- **Hat jedes Konto ein eigenes Postfach,** die Integration einfach je Postfach hinzufügen (siehe unten).
+
+**Sendung von Hand:** Für Pakete ohne Mail (z. B. Kleinanzeigen) die Nummer selbst eintragen – in den
+Desktop-Apps und im Widget über „Sendung hinzufügen“ oder per Aktion:
+
+```yaml
+action: briefankuendigung.sendung_hinzufuegen
+data: { nummer: "H1234567890123456789", name: "Laufschuhe" }   # dienst: dhl|hermes|dpd|amazon (sonst erkannt)
+```
+
+**DHL live (optional):** Mit einem eigenen kostenlosen Schlüssel für die *Shipment Tracking – Unified* API
+(developer.dhl.com) unter **DHL-API-Schlüssel** fragt die Integration offene DHL-Sendungen stündlich direkt bei DHL
+ab – mit genauerem Stand und Termin. Für Hermes, DPD und Amazon gibt es keine offene Schnittstelle; dort zählen
+die Mails. Anmeldungen bei Amazon & Co. werden bewusst nicht nachgebaut (Zwei-Faktor, Nutzungsbedingungen).
+
+Der Sensor **Angekündigte Pakete** hat das Attribut `nach_dienst` (z. B. `{"dhl": 1, "amazon": 2}`).
 
 ## Automationen
 
@@ -88,5 +119,10 @@ Alle Adressen brauchen ein gültiges Home-Assistant-Token und zeigen nur Postfä
 | `GET /api/briefankuendigung/archiv[?q=&konto=]` | Archiv der letzten zwei Jahre |
 | `POST /api/briefankuendigung/erledigt` | `{"id": "…", "erledigt": true}` – als angekommen markieren |
 | `POST /api/briefankuendigung/abrufen[?konto=]` | Postfach jetzt lesen (höchstens einmal pro Minute) |
+| `POST /api/briefankuendigung/sendung` | `{"nummer": "…", "dienst": "dpd", "name": "…", "konto": "…"}` – Sendung von Hand verfolgen (ab 1.4) |
+| `POST /api/briefankuendigung/sendung/entfernen` | `{"id": "…"}` – eigene Sendung entfernen (aus Mails: als angekommen markieren) |
+
+Pakete haben ab 1.4 zusätzlich `dienst`, `dienst_name`, `erwartet` (`2026-10-23`), `zeitfenster`, `kundenkonto`,
+`verfolgen` (Link), `manuell` und `status_text` (DHL live).
 
 Das Symbol liegt in `custom_components/briefankuendigung/brand/` (ab Home Assistant 2026.3 wird es direkt angezeigt).

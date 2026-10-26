@@ -67,6 +67,8 @@ class BriefeSensor(SensorEntity):
         return {
             "gesamt": len(meine),
             "offen": sum(1 for b in meine if not self._abrufer.ist_erledigt(b)),
+            **({"nach_dienst": {d: sum(1 for b in meine if (b.get("dienst") or "dhl") == d and not self._abrufer.ist_erledigt(b))
+                                for d in sorted({b.get("dienst") or "dhl" for b in meine})}} if self._art == "paket" else {}),
             "letzte_ankuendigung": iso(meine[0]["datum"]) if meine else None,
             "letzter_abruf": iso(i.get("stand", 0)),
             "fehler": i.get("fehler") or None,

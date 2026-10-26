@@ -16,6 +16,9 @@ CONF_BENUTZER_HA = "ha_benutzer"  # Home-Assistant-Benutzer, die dieses Konto se
 CONF_PAKET = "paket_absender"     # Absender der DHL-Paketankündigungen (leer = keine Pakete)
 CONF_WICHTIG = "wichtig"          # Stichwörter für wichtige Absender, mit Komma getrennt
 CONF_EREIGNIS_ABSENDER = "ereignis_absender"  # Absender im Ereignis mitsenden (landet in der HA-Datenbank)
+CONF_DIENSTE = "paketdienste"     # Paketdienste, deren Mails gelesen werden (dhl, hermes, dpd, amazon)
+CONF_KUNDENKONTEN = "kundenkonten"  # „adresse = Name“ je Zeile – z. B. zwei Amazon-Konten in einem Postfach
+CONF_DHL_SCHLUESSEL = "dhl_api_schluessel"  # optional: API-Schlüssel der DHL-Sendungsverfolgung (developer.dhl.com)
 
 EREIGNIS = f"{DOMAIN}_neu"        # je neuem Brief/Paket: konto, art, wichtig, datum (+ absender, falls erlaubt)
 ARCHIV_TAGE = 730                 # Archiv (nur Datum, Absender, Art) zwei Jahre aufheben

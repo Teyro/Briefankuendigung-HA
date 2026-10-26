@@ -15,9 +15,10 @@ from homeassistant.helpers.selector import (
 
 from . import abruf
 from .const import (
-    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_EREIGNIS_ABSENDER, CONF_NAME, CONF_ORDNER, CONF_PAKET, CONF_PASSWORT, CONF_PORT,
-    CONF_SERVER, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, STANDARD,
+    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_DIENSTE, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_NAME,
+    CONF_ORDNER, CONF_PAKET, CONF_PASSWORT, CONF_PORT, CONF_SERVER, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, STANDARD,
 )
+from .pakete import ALLE as ALLE_DIENSTE, DIENSTE
 
 ZEITEN_MUSTER = r"^\s*\d{1,2}:\d{2}([ ,;]+\d{1,2}:\d{2})*\s*$"
 
@@ -35,6 +36,12 @@ def _optionen_schema(v: dict, benutzer: list[SelectOptionDict]) -> dict:
         vol.Required(CONF_TAGE, default=v.get(CONF_TAGE, STANDARD[CONF_TAGE])): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
         vol.Required(CONF_ABSENDER, default=v.get(CONF_ABSENDER, STANDARD[CONF_ABSENDER])): str,
         vol.Required(CONF_ORDNER, default=v.get(CONF_ORDNER, STANDARD[CONF_ORDNER])): str,
+        # bis 1.3 gab es nur „paket_absender“ (DHL; leer = keine Pakete)
+        vol.Optional(CONF_DIENSTE, default=v.get(CONF_DIENSTE, ALLE_DIENSTE if v.get(CONF_PAKET, STANDARD[CONF_PAKET]) else [])): SelectSelector(
+            SelectSelectorConfig(options=[SelectOptionDict(value=k, label=d["name"]) for k, d in DIENSTE.items()], multiple=True,
+                                 mode=SelectSelectorMode.LIST)),
+        vol.Optional(CONF_KUNDENKONTEN, default=v.get(CONF_KUNDENKONTEN, "")): TextSelector(TextSelectorConfig(multiline=True)),
+        vol.Optional(CONF_DHL_SCHLUESSEL, default=v.get(CONF_DHL_SCHLUESSEL, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         vol.Optional(CONF_PAKET, default=v.get(CONF_PAKET, STANDARD[CONF_PAKET])): str,
         vol.Optional(CONF_WICHTIG, default=v.get(CONF_WICHTIG, STANDARD[CONF_WICHTIG])): TextSelector(TextSelectorConfig(multiline=True)),
         vol.Optional(CONF_EREIGNIS_ABSENDER, default=v.get(CONF_EREIGNIS_ABSENDER, STANDARD[CONF_EREIGNIS_ABSENDER])): BooleanSelector(),
