@@ -382,6 +382,10 @@ async def test_kalender_aufgaben_ersatz_heute(hass: HomeAssistant, hass_client, 
     aioclient_mock.get("https://gls-group.eu/app/service/open/rest/DE/de/rstt001", json={"tuStatus": [{"progressBar": {"statusInfo": "INDELIVERY"},
         "history": [{"date": heute, "time": "07:00:00", "evtDscr": "Das Paket ist in Zustellung.", "address": {"city": "Hamburg"}}]}]})
     aioclient_mock.post("https://api.ship24.com/public/v1/trackers/track", status=429)
+    aioclient_mock.get("https://www.dhl.de/int-verfolgen/data/search", status=503)
+    aioclient_mock.get("https://www.deutschepost.de/int-verfolgen/data/search", json={"sendungen": [{"sendungsdetails": {
+        "istZugestellt": False, "sendungsverlauf": {"status": "Die Sendung liegt in der Packstation zur Abholung bereit.", "events": [
+            {"datum": "2026-10-19T14:13:52+02:00", "status": "Die Sendung liegt in der Packstation zur Abholung bereit."}]}}}]})
     with patch.object(abruf, "abrufen", return_value=([], set())):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
@@ -397,6 +401,9 @@ async def test_kalender_aufgaben_ersatz_heute(hass: HomeAssistant, hass_client, 
     assert b["stand"] == "heute" and b["anbieter"] == "GLS (öffentlich)" and b["ereignisse"][0]["ort"] == "Hamburg"
     assert ereignisse and ereignisse[-1]["stand"] == "heute" and ereignisse[-1]["dienst"] == "gls"
     assert hass.states.get(eid_plattform(hass, entry, "binary_sensor", "in_zustellung")).state == "on"
+    # DHL ohne Schlüssel: dhl.de antwortet nicht → deutschepost.de springt ein
+    thalia = next(x for x in a.index["briefe"] if x.get("sendung") == "00340434161094015902")
+    assert thalia["stand"] == "abholbereit" and thalia["anbieter"] == "DHL (ohne Schlüssel)"
 
     # Kalender: Termin am 2.1.2099
     kal = eid_plattform(hass, entry, "calendar", "lieferungen")
@@ -413,7 +420,7 @@ async def test_kalender_aufgaben_ersatz_heute(hass: HomeAssistant, hass_client, 
 
     # Aktion heute (für den Sprachassistenten)
     r = await hass.services.async_call(DOMAIN, "heute", {}, blocking=True, return_response=True)
-    assert r["pakete_heute"] == 0 and "Heute kommt kein Paket" in r["text"]
+    assert r["pakete_heute"] == 1 and "Thalia" in r["text"], r
 
     # Dashboard-Karte wird ausgeliefert
     client = await hass_client()

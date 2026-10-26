@@ -261,10 +261,13 @@ def siebzehn_status(eintrag: dict) -> dict | None:
 
 def _stand_aus_text(t: str) -> str:
     s = (t or "").lower()
-    if any(w in s for w in ("zugestellt", "delivered", "ausgeliefert")):
+    nicht = any(w in s for w in ("nicht zugestellt", "konnte nicht", "not delivered"))
+    if not nicht and any(w in s for w in ("zugestellt", "delivered", "ausgeliefert", "abgeholt", "abholung aus")):
         return "zugestellt"
-    if any(w in s for w in ("abhol", "pickup", "paketshop", "packstation", "filiale")):
+    if any(w in s for w in ("zur abholung", "abholbereit", "liegt in der packstation", "liegt in der filiale", "pickup", "paketshop")):
         return "abholbereit"
+    if nicht:
+        return "unterwegs"
     if any(w in s for w in ("in zustellung", "zustellfahrzeug", "out for delivery", "wird heute")):
         return "heute"
     return "unterwegs"
@@ -356,3 +359,20 @@ def dpd_status(antwort: dict) -> dict | None:
     return {"stand": "zugestellt" if status == "DELIVERED" else "heute" if status in ("COURIER", "OUT_FOR_DELIVERY") else
             "abholbereit" if status == "PICKUP" else _stand_aus_text(text),
             "erwartet": "", "text": text[:160], "ereignisse": ereignisse, "ende": status == "DELIVERED", "problem": False}
+
+
+def dhl_oeffentlich_status(antwort: dict) -> dict | None:
+    """Öffentliche DHL-Sendungsverfolgung ohne Schlüssel (dhl.de bzw. deutschepost.de …/int-verfolgen/data/search)"""
+    try:
+        sd = (antwort.get("sendungen") or [])[0]["sendungsdetails"]
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return None
+    v = sd.get("sendungsverlauf") or {}
+    ereignisse = ereignisse_zusammen([], [e for e in (_ereignis(x.get("datum"), " ".join(str(x.get("status") or "").split()), x.get("ort") or "")
+                                                     for x in v.get("events") or []) if e])
+    text = v.get("status") or (ereignisse[0]["text"] if ereignisse else "")
+    zu = bool(sd.get("istZugestellt"))
+    stand = "zugestellt" if zu else _stand_aus_text(ereignisse[0]["text"] if ereignisse else text)
+    if not zu and stand == "zugestellt":
+        stand = _stand_aus_text(text)
+    return {"stand": stand, "erwartet": "", "text": str(text)[:160], "ereignisse": ereignisse, "ende": zu, "problem": False}

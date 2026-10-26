@@ -145,3 +145,16 @@ def test_ersatz_anbieter() -> None:
         "scanInfo": {"scan": [{"date": "2026-10-21T07:00:00", "scanData": {"location": "Hamburg"}, "scanDescription": {"content": ["Paket ist in Zustellung."]}}]}}}})
     assert dpd["stand"] == "heute" and dpd["ereignisse"][0]["text"] == "Paket ist in Zustellung."
     assert pakete.gls_status({}) is None and pakete.dpd_status({}) is None and pakete.ups_status(None) is None
+
+
+def test_dhl_ohne_schluessel() -> None:
+    a = {"sendungen": [{"sendungsdetails": {"istZugestellt": True, "sendungsverlauf": {"status": "Abholung aus Packstation", "events": [
+        {"datum": "2026-10-19T07:58:09+02:00", "status": "Die Sendung wurde in das Zustellfahrzeug geladen. Die Zustellung  erfolgt voraussichtlich heute."},
+        {"datum": "2026-10-19T14:13:52+02:00", "status": "Die Sendung liegt in der Packstation zur Abholung bereit."},
+        {"datum": "2026-10-21T15:29:34+02:00", "status": "Abholung aus Packstation"}]}}}]}
+    st = pakete.dhl_oeffentlich_status(a)
+    assert st["stand"] == "zugestellt" and st["ende"] and st["ereignisse"][0]["text"] == "Abholung aus Packstation"
+    assert "Zustellung erfolgt" in st["ereignisse"][2]["text"]
+    assert pakete.dhl_oeffentlich_status({"sendungen": []}) is None
+    assert pakete._stand_aus_text("Die Sendung konnte nicht zugestellt werden und wird in eine Packstation gebracht.") == "unterwegs"
+    assert pakete._stand_aus_text("Die Sendung liegt in der Packstation zur Abholung bereit.") == "abholbereit"

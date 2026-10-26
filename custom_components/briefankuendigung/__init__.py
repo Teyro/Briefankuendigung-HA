@@ -52,7 +52,8 @@ DHL_API = "https://api-eu.dhl.com/track/shipments"
 SIEBZEHN_API = "https://api.17track.net/track/v2.2"
 UPS_API = "https://onlinetools.ups.com"
 SHIP24_API = "https://api.ship24.com/public/v1/trackers/track"
-GLS_SEITE = "https://gls-group.eu/app/service/open/rest/DE/de/rstt001"
+GLS_SEITEN = ("https://gls-group.com/app/service/open/rest/DE/de/rstt001", "https://gls-group.eu/app/service/open/rest/DE/de/rstt001")
+DHL_SEITEN = ("https://www.dhl.de/int-verfolgen/data/search", "https://www.deutschepost.de/int-verfolgen/data/search")
 DPD_SEITE = "https://tracking.dpd.de/rest/plc/de_DE/"
 BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Briefankuendigung/1.6"
 PAKET_TAGE = 60          # nicht zugestellte Pakete so lange behalten (auch wenn keine Mail mehr kommt)
@@ -212,6 +213,8 @@ class BriefAbruf:
             self.hass.async_create_task(self.async_dhl_aktualisieren())
         elif dienst in pakete.SIEBZEHN and self.cfg.get(CONF_SIEBZEHN):
             self.hass.async_create_task(self.async_siebzehn_aktualisieren())
+        # ohne Schlüssel (bzw. als Ersatz) gleich einmal nachfragen
+        self.hass.async_create_task(self.async_ersatz_aktualisieren())
         return b
 
     async def async_sendung_entfernen(self, brief_id: str) -> bool:
@@ -293,11 +296,13 @@ class BriefAbruf:
 
     async def async_ersatz_aktualisieren(self, *_args) -> None:
         """Ersatz, wenn DHL bzw. 17TRACK nichts liefern (kein Schlüssel, Kontingent leer, Nummer unbekannt):
-        UPS (eigener Zugang) → Ship24 (Schlüssel) → öffentliche Seiten von GLS und DPD. Höchstens 10 Sendungen je Lauf."""
+        DHL ohne Schlüssel (dhl.de, ersatzweise deutschepost.de) → UPS (eigener Zugang) → Ship24 (Schlüssel) →
+        öffentliche Seiten von GLS und DPD. Höchstens 10 Sendungen je Lauf."""
         cfg = self.cfg
         jetzt = int(time.time() * 1000)
         offen = [b for b in self.index["briefe"] if b.get("art") == "paket" and b.get("sendung") and b.get("stand") != "zugestellt"
-                 and b["id"] not in self.index.get("erledigt", {}) and jetzt - int(b.get("live_zeit") or 0) > 3 * 3600_000][:10]
+                 and b["id"] not in self.index.get("erledigt", {}) and jetzt - int(b.get("live_zeit") or 0) > 50 * 60_000
+                 and not self._hat_hauptquelle(b)][:10]
         if not offen:
             return
         sitzung = async_get_clientsession(self.hass)
@@ -317,6 +322,8 @@ class BriefAbruf:
         for b in offen:
             dienst, nr = b.get("dienst") or "dhl", b["sendung"]
             versuche = []
+            if cfg.get(CONF_OEFFENTLICH, True) and dienst == "dhl":
+                versuche.append("DHL (ohne Schlüssel)")
             if dienst == "ups" and cfg.get(CONF_UPS_ID) and cfg.get(CONF_UPS_GEHEIM):
                 versuche.append("UPS")
             if cfg.get(CONF_SHIP24) and dienst != "amazon":
@@ -325,7 +332,13 @@ class BriefAbruf:
                 versuche.append(dienst.upper() + " (öffentlich)")
             for v in versuche:
                 st = None
-                if v == "UPS":
+                if v == "DHL (ohne Schlüssel)":
+                    for url in DHL_SEITEN:
+                        st = pakete.dhl_oeffentlich_status(await holen("GET", url, params={"piececode": nr, "language": "de"},
+                                                                       headers={"User-Agent": BROWSER, "Accept": "application/json"}) or {})
+                        if st:
+                            break
+                elif v == "UPS":
                     if ups_token is None:
                         import aiohttp
                         t = await holen("POST", f"{UPS_API}/security/v1/oauth/token", data={"grant_type": "client_credentials"},
@@ -346,7 +359,10 @@ class BriefAbruf:
                     except (KeyError, IndexError, TypeError):
                         st = None
                 elif dienst == "gls":
-                    st = pakete.gls_status(await holen("GET", GLS_SEITE, params={"match": nr}, headers={"User-Agent": BROWSER}) or {})
+                    for url in GLS_SEITEN:
+                        st = pakete.gls_status(await holen("GET", url, params={"match": nr}, headers={"User-Agent": BROWSER}) or {})
+                        if st:
+                            break
                 else:
                     st = pakete.dpd_status(await holen("GET", DPD_SEITE + nr, headers={"User-Agent": BROWSER}) or {})
                 if st and (st.get("ereignisse") or st.get("text")):
@@ -355,6 +371,13 @@ class BriefAbruf:
                     break
         if geaendert:
             await self._speichern_jetzt()
+
+    def _hat_hauptquelle(self, b: dict) -> bool:
+        """Wird die Sendung schon über den DHL-Schlüssel bzw. 17TRACK verfolgt? (dann kein Ersatz – spart Kontingent)"""
+        d = b.get("dienst") or "dhl"
+        if d == "dhl" and self.cfg.get(CONF_DHL_SCHLUESSEL) and b.get("anbieter") in ("DHL", None, ""):
+            return bool(b.get("ereignisse"))
+        return bool(self.cfg.get(CONF_SIEBZEHN)) and b.get("t17") == 1 and bool(b.get("ereignisse"))
 
     def heute_text(self) -> dict:
         """Für Sprachassistent und Automationen: was heute kommt (Satz und Liste)"""
