@@ -1,10 +1,16 @@
 {
   "domain": "briefankuendigung",
   "name": "Briefankündigung",
-  "codeowners": ["@Teyro"],
+  "after_dependencies": [
+    "frontend"
+  ],
+  "codeowners": [
+    "@Teyro"
+  ],
   "config_flow": true,
-  "dependencies": ["http"],
-  "after_dependencies": ["frontend"],
+  "dependencies": [
+    "http"
+  ],
   "documentation": "https://github.com/Teyro/Briefankuendigung-HA",
   "integration_type": "service",
   "iot_class": "cloud_polling",
