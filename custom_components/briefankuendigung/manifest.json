@@ -3,11 +3,11 @@
   "name": "Briefankündigung",
   "codeowners": ["@Teyro"],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": ["http", "frontend"],
   "documentation": "https://github.com/Teyro/Briefankuendigung-HA",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Teyro/Briefankuendigung-HA/issues",
   "requirements": [],
-  "version": "1.5.0"
+  "version": "1.6.0"
 }

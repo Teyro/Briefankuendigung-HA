@@ -22,7 +22,11 @@
           "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
           "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)",
           "siebzehn_schluessel": "17TRACK-Schlüssel (optional, api.17track.net – live Stand für Hermes, DPD, GLS, UPS; das Gratis-Kontingent sind einmalig 200 Sendungen)",
-          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)"
+          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)",
+          "ship24_schluessel": "Ship24-Schlüssel (optional, Ersatz für 17TRACK)",
+          "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
+          "ups_client_secret": "UPS Client-Secret",
+          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)"
         }
       }
     },
@@ -52,7 +56,11 @@
           "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
           "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)",
           "siebzehn_schluessel": "17TRACK-Schlüssel (optional, api.17track.net – live Stand für Hermes, DPD, GLS, UPS; das Gratis-Kontingent sind einmalig 200 Sendungen)",
-          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)"
+          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)",
+          "ship24_schluessel": "Ship24-Schlüssel (optional, Ersatz für 17TRACK)",
+          "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
+          "ups_client_secret": "UPS Client-Secret",
+          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)"
         }
       }
     }
@@ -74,6 +82,19 @@
     "binary_sensor": {
       "post_heute": {
         "name": "Post heute"
+      },
+      "in_zustellung": {
+        "name": "Paket in Zustellung"
+      }
+    },
+    "calendar": {
+      "lieferungen": {
+        "name": "Lieferungen"
+      }
+    },
+    "todo": {
+      "paketliste": {
+        "name": "Pakete"
       }
     }
   },
@@ -97,6 +118,16 @@
         "konto": {
           "name": "Postfach",
           "description": "Name des Postfachs (leer = das erste)"
+        }
+      }
+    },
+    "heute": {
+      "name": "Was kommt heute?",
+      "description": "Satz für den Sprachassistenten und Zahlen: Pakete heute, unterwegs, Briefe heute.",
+      "fields": {
+        "konto": {
+          "name": "Postfach",
+          "description": "Name oder ID (leer = alle)"
         }
       }
     }

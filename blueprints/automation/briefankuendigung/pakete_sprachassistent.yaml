@@ -1,0 +1,27 @@
+blueprint:
+  name: "Pakete: Sprachassistent („Welche Pakete kommen heute?“)"
+  description: >-
+    Beantwortet Fragen nach heutigen Paketen und Briefen über Home Assistant Assist
+    (Integration Briefankündigung ab 1.6).
+  domain: automation
+  source_url: https://github.com/Teyro/Briefankuendigung-HA/blob/main/blueprints/automation/briefankuendigung/pakete_sprachassistent.yaml
+  input:
+    saetze:
+      name: Sätze
+      description: Worauf der Assistent antwortet
+      default:
+        - "Welche Pakete kommen heute"
+        - "Kommt heute ein Paket"
+        - "Kommt heute Post"
+        - "Was kommt heute"
+      selector:
+        text:
+          multiple: true
+triggers:
+  - trigger: conversation
+    command: !input saetze
+actions:
+  - action: briefankuendigung.heute
+    response_variable: post
+  - set_conversation_response: "{{ post.text }}"
+mode: parallel

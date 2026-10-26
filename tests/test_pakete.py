@@ -125,3 +125,23 @@ def test_siebzehn_status_und_verlauf() -> None:
     alt = [{"zeit": "2026-10-20T10:00:00+02:00", "text": "Im Verteilzentrum"}]
     assert len(pakete.ereignisse_zusammen(alt, st["ereignisse"])) == 2
     assert pakete.verfolgen("gls", "12345678901").startswith("https://gls-group.com/")
+
+
+def test_ersatz_anbieter() -> None:
+    ups = pakete.ups_status({"currentStatus": {"type": "I", "description": "Out For Delivery Today"},
+                             "deliveryDate": [{"type": "SDD", "date": "20261023"}], "deliveryTime": {"startTime": "100000", "endTime": "140000"},
+                             "activity": [{"date": "20261023", "time": "071500", "status": {"type": "I", "description": "OUT FOR DELIVERY TODAY"},
+                                           "location": {"address": {"city": "HAMBURG", "countryCode": "DE"}}}]})
+    assert ups["stand"] == "heute" and ups["erwartet"] == "2026-10-23" and ups["zeitfenster"] == "10:00–14:00"
+    assert ups["ereignisse"][0] == {"zeit": "2026-10-23T07:15:00", "text": "Out for delivery today", "ort": "Hamburg, DE"}
+    s24 = pakete.ship24_status({"shipment": {"statusMilestone": "available_for_pickup", "delivery": {"estimatedDeliveryDate": "2026-10-22T00:00:00Z"}},
+                                "events": [{"occurrenceDatetime": "2026-10-22T09:00:00", "status": "Im Paketshop", "location": "Hamburg"}]})
+    assert s24["stand"] == "abholbereit" and s24["erwartet"] == "2026-10-22" and s24["text"] == "Im Paketshop"
+    gls = pakete.gls_status({"tuStatus": [{"progressBar": {"statusInfo": "DELIVERED"},
+                                           "history": [{"date": "2026-10-21", "time": "11:00:00", "evtDscr": "Zugestellt", "address": {"city": "Hamburg"}}]}]})
+    assert gls["stand"] == "zugestellt" and gls["ende"] and gls["ereignisse"][0]["ort"] == "Hamburg"
+    dpd = pakete.dpd_status({"parcellifecycleResponse": {"parcelLifeCycleData": {
+        "statusInfo": [{"status": "COURIER", "label": "In Zustellung", "statusHasBeenReached": True, "isCurrentStatus": True}],
+        "scanInfo": {"scan": [{"date": "2026-10-21T07:00:00", "scanData": {"location": "Hamburg"}, "scanDescription": {"content": ["Paket ist in Zustellung."]}}]}}}})
+    assert dpd["stand"] == "heute" and dpd["ereignisse"][0]["text"] == "Paket ist in Zustellung."
+    assert pakete.gls_status({}) is None and pakete.dpd_status({}) is None and pakete.ups_status(None) is None

@@ -255,3 +255,104 @@ def siebzehn_status(eintrag: dict) -> dict | None:
         "problem": status in ("DeliveryFailure", "Exception"),
         "dienst_name": name,
     }
+
+
+# --- Ersatz-Anbieter (wenn DHL bzw. 17TRACK nichts liefern): UPS, Ship24, öffentliche Seiten von GLS und DPD ---
+
+def _stand_aus_text(t: str) -> str:
+    s = (t or "").lower()
+    if any(w in s for w in ("zugestellt", "delivered", "ausgeliefert")):
+        return "zugestellt"
+    if any(w in s for w in ("abhol", "pickup", "paketshop", "packstation", "filiale")):
+        return "abholbereit"
+    if any(w in s for w in ("in zustellung", "zustellfahrzeug", "out for delivery", "wird heute")):
+        return "heute"
+    return "unterwegs"
+
+
+def _ups_zeit(tag: str, zeit: str) -> str:
+    if len(tag or "") != 8:
+        return ""
+    z = (zeit or "000000").ljust(6, "0")
+    return f"{tag[:4]}-{tag[4:6]}-{tag[6:]}T{z[:2]}:{z[2:4]}:{z[4:6]}"
+
+
+def ups_status(paket: dict) -> dict | None:
+    """UPS Tracking API: trackResponse.shipment[0].package[0] → {stand, erwartet, zeitfenster, text, ereignisse, ende, problem}"""
+    if not isinstance(paket, dict):
+        return None
+    akt = paket.get("activity") or []
+    aktuell = paket.get("currentStatus") or ((akt[0] or {}).get("status") if akt else {}) or {}
+    typ, text = aktuell.get("type") or "", aktuell.get("description") or ""
+    termine = paket.get("deliveryDate") or []
+    termin = next((d for d in termine if d.get("type") in ("SDD", "RDD", "DEL")), termine[0] if termine else {})
+    t = (termin or {}).get("date") or ""
+    zeit = paket.get("deliveryTime") or {}
+    von, bis = zeit.get("startTime") or "", zeit.get("endTime") or ""
+    ereignisse = []
+    for a in akt:
+        st = a.get("status") or {}
+        adr = ((a.get("location") or {}).get("address") or {})
+        ort = ", ".join(x for x in ((adr.get("city") or "").title(), adr.get("countryCode") or "") if x)
+        beschr = st.get("description") or ""
+        if beschr.isupper() and len(beschr) > 3:
+            beschr = beschr[0] + beschr[1:].lower()
+        ereignisse.append(_ereignis(_ups_zeit(a.get("date"), a.get("time")), beschr, ort))
+    return {
+        "stand": "zugestellt" if typ == "D" else _stand_aus_text(text),
+        "erwartet": f"{t[:4]}-{t[4:6]}-{t[6:]}" if len(t) == 8 else "",
+        "zeitfenster": f"{von[:2]}:{von[2:4]}–{bis[:2]}:{bis[2:4]}" if len(von) >= 4 and len(bis) >= 4 else "",
+        "text": text[:160], "ereignisse": ereignisse_zusammen([], [e for e in ereignisse if e]),
+        "ende": typ == "D", "problem": typ == "X",
+    }
+
+
+def ship24_status(tracking: dict) -> dict | None:
+    """Ship24: data.trackings[0] → Stand"""
+    if not isinstance(tracking, dict):
+        return None
+    sh = tracking.get("shipment") or {}
+    m = sh.get("statusMilestone") or ""
+    ereignisse = [_ereignis(e.get("occurrenceDatetime"), e.get("status"), e.get("location") or "") for e in tracking.get("events") or []]
+    ereignisse = ereignisse_zusammen([], [e for e in ereignisse if e])
+    return {
+        "stand": {"delivered": "zugestellt", "available_for_pickup": "abholbereit", "out_for_delivery": "heute"}.get(m, "unterwegs"),
+        "erwartet": _tag(((sh.get("delivery") or {}).get("estimatedDeliveryDate"))),
+        "text": (ereignisse[0]["text"] if ereignisse else "")[:160], "ereignisse": ereignisse,
+        "ende": m == "delivered", "problem": m in ("exception", "failed_attempt"),
+    }
+
+
+def gls_status(antwort: dict) -> dict | None:
+    """Öffentliche GLS-Sendungsverfolgung (gls-group.eu …/rstt001?match=…) → Stand"""
+    try:
+        tu = (antwort.get("tuStatus") or [])[0]
+    except (AttributeError, IndexError, TypeError):
+        return None
+    info = str(((tu.get("progressBar") or {}).get("statusInfo")) or "").upper()
+    ereignisse = []
+    for h in tu.get("history") or []:
+        adr = h.get("address") or {}
+        ort = ", ".join(x for x in (adr.get("city") or "", adr.get("countryName") or "") if x)
+        ereignisse.append(_ereignis(f"{h.get('date') or ''}T{h.get('time') or '00:00:00'}" if h.get("date") else None, h.get("evtDscr"), ort))
+    ereignisse = ereignisse_zusammen([], [e for e in ereignisse if e])
+    text = ereignisse[0]["text"] if ereignisse else ""
+    return {"stand": "zugestellt" if info == "DELIVERED" else "heute" if info == "INDELIVERY" else _stand_aus_text(text),
+            "erwartet": "", "text": text[:160], "ereignisse": ereignisse, "ende": info == "DELIVERED", "problem": False}
+
+
+def dpd_status(antwort: dict) -> dict | None:
+    """Öffentliche DPD-Sendungsverfolgung (tracking.dpd.de/rest/plc/…) → Stand"""
+    try:
+        d = antwort["parcellifecycleResponse"]["parcelLifeCycleData"]
+    except (KeyError, TypeError):
+        return None
+    infos = d.get("statusInfo") or []
+    aktuell = next((i for i in reversed(infos) if i.get("isCurrentStatus")), None) or next((i for i in reversed(infos) if i.get("statusHasBeenReached")), {})
+    status, text = aktuell.get("status") or "", aktuell.get("label") or ""
+    ereignisse = [_ereignis(s.get("date"), " ".join(c for c in ((s.get("scanDescription") or {}).get("content") or []) if isinstance(c, str)),
+                            (s.get("scanData") or {}).get("location") or "") for s in ((d.get("scanInfo") or {}).get("scan") or [])]
+    ereignisse = ereignisse_zusammen([], [e for e in ereignisse if e])
+    return {"stand": "zugestellt" if status == "DELIVERED" else "heute" if status in ("COURIER", "OUT_FOR_DELIVERY") else
+            "abholbereit" if status == "PICKUP" else _stand_aus_text(text),
+            "erwartet": "", "text": text[:160], "ereignisse": ereignisse, "ende": status == "DELIVERED", "problem": False}
