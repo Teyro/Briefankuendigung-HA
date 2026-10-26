@@ -6,7 +6,7 @@ import time
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -275,7 +275,7 @@ async def test_paketdienste_kundenkonten_von_hand_dhl(hass: HomeAssistant, hass_
 
     client = await hass_client()
     daten = await (await client.get("/api/briefankuendigung/briefe")).json()
-    assert daten["version"] == 3 and daten["dienste"]["dpd"] == "DPD" and daten["konten"][0]["dhl_live"] is True
+    assert daten["version"] == 4 and daten["dienste"]["dpd"] == "DPD" and daten["konten"][0]["dhl_live"] is True
     nach = {b["id"]: b for b in daten["briefe"]}
     assert nach["1" * 20]["dienst_name"] == "Hermes" and nach["1" * 20]["verfolgen"].startswith("https://www.myhermes.de/")
     assert nach["2" * 20]["kundenkonto"] == "Johanna" and nach["1" * 20]["kundenkonto"] == ""
@@ -304,4 +304,66 @@ async def test_paketdienste_kundenkonten_von_hand_dhl(hass: HomeAssistant, hass_
     daten = await (await client.get("/api/briefankuendigung/briefe")).json()
     nach = {b["id"]: b for b in daten["briefe"]}
     assert dhl["id"] not in nach and nach["1" * 20]["erledigt"] is True
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_siebzehn_mitteilungen_umbenennen(hass: HomeAssistant, hass_client, aioclient_mock, tmp_path) -> None:
+    """1.5: 17TRACK (anmelden, Stand mit Verlauf, beenden), Mitteilungen über notify, umbenennen, GLS/UPS."""
+    hass.config.config_dir = str(tmp_path)
+    meldungen = async_mock_service(hass, "notify", "handy")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de",
+                            options={"paketdienste": ["dhl", "hermes", "dpd", "gls", "ups"], "siebzehn_schluessel": "s17",
+                                     "mitteilen": ["notify.handy"]})
+    entry.add_to_hass(hass)
+    api = "https://api.17track.net/track/v2.2"
+    aioclient_mock.post(f"{api}/register", json={"code": 0, "data": {
+        "accepted": [{"number": "H1002345678901234567", "carrier": 100031}],
+        "rejected": [{"number": "1Z999AA10123456784", "error": {"code": -18019901, "message": "already registered"}}]}})
+    aioclient_mock.post(f"{api}/gettrackinfo", json={"code": 0, "data": {"accepted": [
+        {"number": "H1002345678901234567", "carrier": 100031, "track_info": {
+            "latest_status": {"status": "OutForDelivery"},
+            "latest_event": {"time_iso": "2026-10-21T07:12:00+02:00", "description": "Die Sendung ist in der Zustellung."},
+            "time_metrics": {"estimated_delivery_date": {"from": "2026-10-21T00:00:00+02:00", "to": None}},
+            "tracking": {"providers": [{"provider": {"name": "Hermes"}, "events": [
+                {"time_iso": "2026-10-21T07:12:00+02:00", "description": "Die Sendung ist in der Zustellung.", "location": "Hamburg"},
+                {"time_iso": "2026-10-20T18:00:00+02:00", "description": "Die Sendung ist im Verteilzentrum.", "location": "Ketzin"}]}]}}},
+        {"number": "1Z999AA10123456784", "carrier": 100002, "track_info": {"latest_status": {"status": "Delivered"},
+                                                                             "latest_event": {"description": "Zugestellt"}}},
+    ]}})
+    aioclient_mock.post(f"{api}/stoptrack", json={"code": 0, "data": {"accepted": [{"number": "1Z999AA10123456784"}]}})
+    aioclient_mock.post(f"{api}/getquota", json={"code": 0, "data": {"quota_total": 200, "quota_used": 2, "quota_remain": 198}})
+    with patch.object(abruf, "abrufen", return_value=([], set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    client = await hass_client()
+    hermes = await (await client.post("/api/briefankuendigung/sendung", json={"nummer": "H1002345678901234567", "name": "Laufschuhe"})).json()
+    ups = await (await client.post("/api/briefankuendigung/sendung", json={"nummer": "1Z999AA10123456784"})).json()
+    assert hermes["dienst"] == "hermes" and ups["dienst"] == "ups" and ups["verfolgen"].startswith("https://www.ups.com/")
+    a = hass.data[DOMAIN][entry.entry_id]
+    await a.async_siebzehn_aktualisieren()
+    await hass.async_block_till_done()
+
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    nach = {b["id"]: b for b in daten["briefe"]}
+    h, u = nach[hermes["id"]], nach[ups["id"]]
+    assert h["stand"] == "heute" and h["erwartet"] == "2026-10-21" and h["status_text"] == "Die Sendung ist in der Zustellung."
+    assert [e["ort"] for e in h["ereignisse"]] == ["Hamburg", "Ketzin"] and "t17" not in h
+    assert u["stand"] == "zugestellt" and daten["konten"][0]["siebzehn"] is True and daten["konten"][0]["siebzehn_rest"] == 198
+    assert a.index["briefe"][[b["id"] for b in a.index["briefe"]].index(ups["id"])]["t17"] == 2   # beendet
+    assert sorted(m.data["title"] for m in meldungen) == ["📦 Kommt heute", "📦 Zugestellt"]
+    assert any("Laufschuhe (Hermes)" == m.data["message"] for m in meldungen)
+
+    # zweiter Lauf: nichts doppelt gemeldet, Zugestelltes nicht mehr abgefragt
+    await a.async_siebzehn_aktualisieren()
+    await hass.async_block_till_done()
+    assert len(meldungen) == 2
+    gesendet = [c for c in aioclient_mock.mock_calls if str(c[1]).endswith("/gettrackinfo")]
+    assert [x["number"] for x in gesendet[-1][2]] == ["H1002345678901234567"]
+
+    # umbenennen
+    assert (await client.post("/api/briefankuendigung/sendung/name", json={"id": hermes["id"], "name": "Neue Schuhe"})).status == 200
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    assert next(b for b in daten["briefe"] if b["id"] == hermes["id"])["name"] == "Neue Schuhe"
+    assert (await client.post("/api/briefankuendigung/sendung/name", json={"id": "f" * 20, "name": "x"})).status == 404
     assert await hass.config_entries.async_unload(entry.entry_id)

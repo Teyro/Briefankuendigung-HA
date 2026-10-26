@@ -20,7 +20,9 @@
           "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)",
           "paketdienste": "Parcel services (their mails are read)",
           "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
-          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)"
+          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)",
+          "siebzehn_schluessel": "17TRACK key (optional, api.17track.net – live status for Hermes, DPD, GLS, UPS; the free quota is a one-time 200 shipments)",
+          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)"
         }
       }
     },
@@ -48,7 +50,9 @@
           "ereignis_absender": "Include the sender in the event \"briefankuendigung_neu\" (stored in the Home Assistant database)",
           "paketdienste": "Parcel services (their mails are read)",
           "kundenkonten": "Customer accounts by recipient address, one per line: address = name (e.g. two Amazon accounts in one mailbox)",
-          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)"
+          "dhl_api_schluessel": "DHL API key (optional, free at developer.dhl.com – then the exact status every hour)",
+          "siebzehn_schluessel": "17TRACK key (optional, api.17track.net – live status for Hermes, DPD, GLS, UPS; the free quota is a one-time 200 shipments)",
+          "mitteilen": "Send notifications for “arriving today”, “ready for pickup”, “delivered” and problems to (e.g. notify.mobile_app_iphone)"
         }
       }
     }

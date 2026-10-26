@@ -1,7 +1,7 @@
-"""Paketdienste: DHL, Hermes, DPD und Amazon – Absender, Sendungsnummern, Stand, Liefertermin.
+"""Paketdienste: DHL, Hermes, DPD, GLS, UPS und Amazon – Absender, Sendungsnummern, Stand, Liefertermin, Verlauf.
 
 Ohne Home-Assistant-Abhängigkeiten (einzeln testbar). Die Daten kommen aus den Benachrichtigungs-Mails
-der Dienste; für DHL optional zusätzlich aus der offiziellen Sendungsverfolgung (eigener API-Schlüssel).
+der Dienste; optional zusätzlich aus der offiziellen DHL-Sendungsverfolgung und aus 17TRACK (je eigener Schlüssel).
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ DIENSTE: dict[str, dict] = {
     "hermes": {"name": "Hermes", "absender": ("myhermes.de", "hermesworld.com", "hermes-europe.de")},
     "dpd": {"name": "DPD", "absender": ("dpd.de", "dpd.com", "dpdgroup.com")},
     "amazon": {"name": "Amazon", "absender": ("amazon.de", "amazon.com", "amazon.at", "amazon.co.uk")},
+    "gls": {"name": "GLS", "absender": ("gls-pakete.de", "gls-group.eu", "gls-group.com")},
+    "ups": {"name": "UPS", "absender": ("ups.com",)},
 }
 ALLE = list(DIENSTE)
 
@@ -28,7 +30,12 @@ NUMMERN = {
     "hermes": r"\b(H\d{19}|H[0-9A-Z]{19}|\d{14})\b",
     "dpd": r"\b(0\d{13}|\d{14})\b",
     "amazon": r"\b(TBA\d{9,14}|\d{3}-\d{7}-\d{7})\b",
+    "gls": r"\b(\d{11,12}|[A-Z0-9]{8})\b",
+    "ups": r"\b(1Z[0-9A-Z]{16})\b",
 }
+
+# Kennungen der Dienste bei 17TRACK (Amazon-Nummern kennt 17TRACK in Deutschland nicht)
+SIEBZEHN = {"dhl": 7041, "hermes": 100031, "dpd": 100007, "gls": 101070, "ups": 100002}
 
 
 def dienst_von_absender(von: str) -> str:
@@ -49,6 +56,8 @@ def dienst_von_nummer(nummer: str) -> str:
         return "dhl"
     if re.fullmatch(r"H[0-9A-Z]{19}", n):
         return "hermes"
+    if re.fullmatch(r"1Z[0-9A-Z]{16}", n):
+        return "ups"
     return ""
 
 
@@ -136,6 +145,8 @@ def verfolgen(dienst: str, sendung: str) -> str:
         "dhl": f"https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?piececode={n}",
         "hermes": f"https://www.myhermes.de/empfangen/sendungsverfolgung/sendungsinformation#{n}",
         "dpd": f"https://tracking.dpd.de/status/de_DE/parcel/{n}",
+        "gls": f"https://gls-group.com/DE/de/paketverfolgung?match={n}",
+        "ups": f"https://www.ups.com/track?loc=de_DE&tracknum={n}",
         "amazon": f"https://www.amazon.de/gp/your-account/order-details?orderID={n}" if re.fullmatch(r"\d{3}-\d{7}-\d{7}", sendung)
         else f"https://track.amazon.de/tracking/{n}",
     }.get(dienst, "")
@@ -175,11 +186,72 @@ def dhl_status(antwort: dict) -> dict | None:
         stufe = "abholbereit"
     else:
         stufe = "unterwegs"
-    e = ""
-    zeit = s.get("estimatedTimeOfDelivery") or ""
-    if zeit:
-        try:
-            e = datetime.fromisoformat(str(zeit).replace("Z", "+00:00")).date().isoformat()
-        except ValueError:
-            e = ""
-    return {"stand": stufe, "erwartet": e, "text": text[:160]}
+    ereignisse = []
+    for ev in s.get("events") or []:
+        if not isinstance(ev, dict):
+            continue
+        ort = ((ev.get("location") or {}).get("address") or {}).get("addressLocality") or ""
+        ereignisse.append(_ereignis(ev.get("timestamp"), ev.get("description") or ev.get("status"), ort))
+    return {"stand": stufe, "erwartet": _tag(s.get("estimatedTimeOfDelivery")), "text": text[:160],
+            "ereignisse": [e for e in ereignisse if e]}
+
+
+def _tag(zeit) -> str:
+    """ISO-Zeit → „2026-10-23“ ("" wenn unbrauchbar)"""
+    if not zeit:
+        return ""
+    try:
+        return datetime.fromisoformat(str(zeit).replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        m = re.match(r"\d{4}-\d{2}-\d{2}", str(zeit))
+        return m.group(0) if m else ""
+
+
+def _ereignis(zeit, text, ort="") -> dict | None:
+    """Ein Eintrag im Verlauf: {zeit (ISO), text, ort}"""
+    if not zeit or not text:
+        return None
+    return {"zeit": str(zeit)[:32], "text": str(text).strip()[:200], **({"ort": str(ort).strip()[:80]} if ort else {})}
+
+
+def ereignisse_zusammen(alt: list | None, neu: list | None, hoechstens: int = 40) -> list[dict]:
+    """Verlauf zusammenführen: ohne Doppelte, neuestes zuerst"""
+    gesehen, erg = set(), []
+    for e in (neu or []) + (alt or []):
+        k = (e.get("zeit", "")[:16], e.get("text", ""))
+        if k not in gesehen:
+            gesehen.add(k)
+            erg.append(e)
+    return sorted(erg, key=lambda e: e.get("zeit", ""), reverse=True)[:hoechstens]
+
+
+# 17TRACK: Hauptstand → unser Stand
+SIEBZEHN_STAND = {"Delivered": "zugestellt", "AvailableForPickup": "abholbereit", "OutForDelivery": "heute"}
+
+
+def siebzehn_status(eintrag: dict) -> dict | None:
+    """Ein Eintrag aus 17TRACK gettrackinfo (data.accepted[]) → {nummer, stand, erwartet, text, ereignisse, ende, problem, dienst_name}"""
+    if not isinstance(eintrag, dict):
+        return None
+    info = eintrag.get("track_info") or {}
+    status = (info.get("latest_status") or {}).get("status") or ""
+    letztes = info.get("latest_event") or {}
+    text = ((letztes.get("description_translation") or {}).get("description") or letztes.get("description") or "")
+    ereignisse, name = [], ""
+    for p in ((info.get("tracking") or {}).get("providers") or []):
+        name = name or ((p.get("provider") or {}).get("name") or "")
+        for ev in p.get("events") or []:
+            ereignisse.append(_ereignis(ev.get("time_iso") or ev.get("time_utc"),
+                                        (ev.get("description_translation") or {}).get("description") or ev.get("description"),
+                                        ev.get("location") or ""))
+    schaetzung = ((info.get("time_metrics") or {}).get("estimated_delivery_date") or {})
+    return {
+        "nummer": str(eintrag.get("number") or ""),
+        "stand": SIEBZEHN_STAND.get(status, "unterwegs"),
+        "erwartet": _tag(schaetzung.get("from") or schaetzung.get("to")),
+        "text": str(text)[:160],
+        "ereignisse": ereignisse_zusammen([], [e for e in ereignisse if e]),
+        "ende": status in ("Delivered", "Expired"),
+        "problem": status in ("DeliveryFailure", "Exception"),
+        "dienst_name": name,
+    }

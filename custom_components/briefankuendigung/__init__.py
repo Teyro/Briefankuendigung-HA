@@ -12,7 +12,10 @@ Für das iPhone-Widget gibt es Adressen, die nur mit gültigem Home-Assistant-To
   POST /api/briefankuendigung/abrufen      – Postfach jetzt lesen (höchstens einmal pro Minute)
   POST /api/briefankuendigung/sendung      – {"nummer", "dienst"?, "name"?, "konto"?}: Sendung von Hand verfolgen
   POST /api/briefankuendigung/sendung/entfernen – {"id"}: von Hand hinzugefügte Sendung entfernen
-Pakete kommen von DHL, Hermes, DPD und Amazon (aus deren Mails; DHL optional über die offizielle Sendungsverfolgung).
+  POST /api/briefankuendigung/sendung/name – {"id", "name"}: Sendung umbenennen
+Pakete kommen von DHL, Hermes, DPD, GLS, UPS und Amazon (aus deren Mails; optional live über die offizielle
+DHL-Sendungsverfolgung und 17TRACK). Bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen kann die
+Integration über notify.… Bescheid geben (z. B. an die Home-Assistant-App auf dem iPhone).
 """
 
 from __future__ import annotations
@@ -39,12 +42,15 @@ from homeassistant.util import dt as dt_util
 
 from . import abruf, pakete
 from .const import (
-    ARCHIV_TAGE, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_NAME, CONF_TAGE, CONF_WICHTIG,
-    CONF_ZEITEN, DOMAIN, EREIGNIS, SIGNAL_NEU, STANDARD,
+    ARCHIV_TAGE, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
+    CONF_SIEBZEHN, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS, SIGNAL_NEU, STANDARD,
 )
 
 PAKET_FELDER = ("sendung", "stand", "dienst", "erwartet", "zeitfenster", "empfaenger", "manuell", "status_text")
 DHL_API = "https://api-eu.dhl.com/track/shipments"
+SIEBZEHN_API = "https://api.17track.net/track/v2.2"
+PAKET_TAGE = 60          # nicht zugestellte Pakete so lange behalten (auch wenn keine Mail mehr kommt)
+MELDEN = {"heute": "📦 Kommt heute", "abholbereit": "📦 Zur Abholung bereit", "zugestellt": "📦 Zugestellt", "problem": "⚠️ Problem mit der Sendung"}
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
@@ -146,18 +152,23 @@ class BriefAbruf:
             self.index["briefe"].append(eintrag)
         # Alte Briefe samt Bild entfernen
         grenze = (time.time() - int(self.cfg.get(CONF_TAGE, 14)) * 86400) * 1000
-        for b in [x for x in self.index["briefe"] if x["datum"] < grenze]:
+        for b in [x for x in self.index["briefe"] if x["datum"] < grenze and not self._paket_offen(x)]:
             if b.get("bild"):
                 try:
                     os.remove(os.path.join(self.ordner, b["bild"]))
                 except OSError:
                     pass
-        self.index["briefe"] = sorted((x for x in self.index["briefe"] if x["datum"] >= grenze), key=lambda x: -x["datum"])
+        self.index["briefe"] = sorted((x for x in self.index["briefe"] if x["datum"] >= grenze or self._paket_offen(x)), key=lambda x: -x["datum"])
         ids = {x["id"] for x in self.index["briefe"]}
         self.index["erledigt"] = {k: v for k, v in self.index.get("erledigt", {}).items() if k in ids}
         archiv_grenze = (time.time() - ARCHIV_TAGE * 86400) * 1000
         self.index["archiv"] = sorted((a for a in archiv if a["datum"] >= archiv_grenze), key=lambda a: -a["datum"])[:3000]
         self._index_schreiben()
+
+    def _paket_offen(self, b: dict) -> bool:
+        """Paket noch unterwegs (bleibt bis zu 60 Tage in der Liste, auch ohne neue Mail)"""
+        return (b.get("art") == "paket" and b.get("stand") != "zugestellt" and b["id"] not in self.index.get("erledigt", {})
+                and b["datum"] >= (time.time() - PAKET_TAGE * 86400) * 1000)
 
     def _index_schreiben(self) -> None:
         # eigener Name je Schreibvorgang: zwei gleichzeitige Speicherungen (z. B. Sendung + DHL-Abfrage) stören sich nicht
@@ -193,6 +204,8 @@ class BriefAbruf:
         await self._speichern_jetzt()
         if dienst == "dhl" and self.cfg.get(CONF_DHL_SCHLUESSEL):
             self.hass.async_create_task(self.async_dhl_aktualisieren())
+        elif dienst in pakete.SIEBZEHN and self.cfg.get(CONF_SIEBZEHN):
+            self.hass.async_create_task(self.async_siebzehn_aktualisieren())
         return b
 
     async def async_sendung_entfernen(self, brief_id: str) -> bool:
@@ -228,16 +241,145 @@ class BriefAbruf:
             except Exception as e:  # noqa: BLE001 – ohne Netz einfach beim nächsten Mal
                 _LOGGER.debug("Briefankündigung: DHL-Abfrage %s: %s", b["sendung"], e)
                 continue
-            if not st:
-                continue
-            if st["stand"] != b.get("stand") or (st["erwartet"] and st["erwartet"] != b.get("erwartet")):
-                abruf.paket_zusammenfuehren(b, {"datum": int(time.time() * 1000), "stand": st["stand"], "erwartet": st["erwartet"]})
-                geaendert = True
-            if st["text"] and st["text"] != b.get("status_text"):
-                b["status_text"] = st["text"]
+            if st and self._live_uebernehmen(b, st):
                 geaendert = True
         if geaendert:
             await self._speichern_jetzt()
+
+    def _live_uebernehmen(self, b: dict, st: dict) -> bool:
+        """Stand aus DHL bzw. 17TRACK übernehmen; bei neuem Stand Bescheid geben. True, wenn sich etwas geändert hat."""
+        geaendert = False
+        vorher = b.get("stand")
+        if st["stand"] != vorher or (st.get("erwartet") and st["erwartet"] != b.get("erwartet")):
+            abruf.paket_zusammenfuehren(b, {"datum": int(time.time() * 1000), "stand": st["stand"], "erwartet": st.get("erwartet", "")})
+            geaendert = True
+        if st.get("text") and st["text"] != b.get("status_text"):
+            b["status_text"] = st["text"]
+            geaendert = True
+        if st.get("ereignisse"):
+            neu = pakete.ereignisse_zusammen(b.get("ereignisse"), st["ereignisse"])
+            if neu != b.get("ereignisse"):
+                b["ereignisse"] = neu
+                geaendert = True
+        if bool(st.get("problem")) != bool(b.get("problem")):
+            b["problem"] = bool(st.get("problem"))
+            geaendert = True
+            if b["problem"]:
+                self._mitteilen(b, "problem")
+        if b.get("stand") != vorher:
+            self._mitteilen(b, b["stand"])
+        return geaendert
+
+    async def async_siebzehn_aktualisieren(self, *_args) -> None:
+        """Offene Sendungen (Hermes, DPD, GLS, UPS; DHL ohne eigenen DHL-Schlüssel) über 17TRACK verfolgen.
+        Jede Anmeldung kostet ein Stück Kontingent – deshalb nur einmal je Sendung, und nach der Zustellung wird beendet."""
+        schluessel = (self.cfg.get(CONF_SIEBZEHN) or "").strip()
+        if not schluessel:
+            return
+        dhl_selbst = bool(self.cfg.get(CONF_DHL_SCHLUESSEL))
+        offen = [b for b in self.index["briefe"] if b.get("art") == "paket" and b.get("sendung") and b.get("dienst") in pakete.SIEBZEHN
+                 and not (b.get("dienst") == "dhl" and dhl_selbst) and b.get("stand") != "zugestellt"
+                 and b["id"] not in self.index.get("erledigt", {}) and b.get("t17", 0) in (0, 1)]
+        if not offen:
+            return
+        sitzung = async_get_clientsession(self.hass)
+        kopf = {"17token": schluessel, "Content-Type": "application/json"}
+
+        async def anfrage(pfad: str, koerper) -> dict | None:
+            try:
+                async with sitzung.post(f"{SIEBZEHN_API}/{pfad}", json=koerper, headers=kopf, timeout=30) as r:
+                    if r.status in (401, 403):
+                        _LOGGER.warning("Briefankündigung: 17TRACK lehnt den Schlüssel ab")
+                        return None
+                    if r.status != 200:
+                        return None
+                    antwort = await r.json(content_type=None)
+            except Exception as e:  # noqa: BLE001 – ohne Netz beim nächsten Mal
+                _LOGGER.debug("Briefankündigung: 17TRACK %s: %s", pfad, e)
+                return None
+            if not isinstance(antwort, dict) or antwort.get("code") not in (0, None):
+                _LOGGER.warning("Briefankündigung: 17TRACK %s: %s", pfad, antwort.get("data") if isinstance(antwort, dict) else antwort)
+                return None
+            return antwort.get("data") or {}
+
+        geaendert = False
+        # 1. neue Sendungen anmelden
+        neu = [b for b in offen if not b.get("t17")]
+        for i in range(0, len(neu), 40):
+            teil = neu[i:i + 40]
+            daten = await anfrage("register", [{"number": b["sendung"], "carrier": pakete.SIEBZEHN[b["dienst"]]} for b in teil])
+            if daten is None:
+                return
+            angenommen = {str(x.get("number")) for x in daten.get("accepted") or []}
+            for x in daten.get("rejected") or []:
+                # schon angemeldet (-18019901) zählt als angemeldet; sonst nicht wieder versuchen
+                if (x.get("error") or {}).get("code") == -18019901:
+                    angenommen.add(str(x.get("number")))
+            for b in teil:
+                b["t17"] = 1 if b["sendung"] in angenommen else -1
+            geaendert = True
+        # 2. Stand holen
+        verfolgt = [b for b in offen if b.get("t17") == 1]
+        beenden = []
+        for i in range(0, len(verfolgt), 40):
+            teil = verfolgt[i:i + 40]
+            daten = await anfrage("gettrackinfo", [{"number": b["sendung"], "carrier": pakete.SIEBZEHN[b["dienst"]]} for b in teil])
+            if daten is None:
+                break
+            for x in daten.get("accepted") or []:
+                st = pakete.siebzehn_status(x)
+                b = next((y for y in teil if st and y["sendung"] == st["nummer"]), None)
+                if not b:
+                    continue
+                if self._live_uebernehmen(b, st):
+                    geaendert = True
+                if st["ende"]:
+                    beenden.append(b)
+        # 3. Zugestellte nicht weiter verfolgen
+        if beenden and await anfrage("stoptrack", [{"number": b["sendung"], "carrier": pakete.SIEBZEHN[b["dienst"]]} for b in beenden]) is not None:
+            for b in beenden:
+                b["t17"] = 2
+            geaendert = True
+        rest = await anfrage("getquota", {})
+        if rest and "quota_remain" in rest:
+            self.index["siebzehn_rest"] = rest["quota_remain"]
+        if geaendert:
+            await self._speichern_jetzt()
+
+    @callback
+    def _mitteilen(self, b: dict, anlass: str) -> None:
+        """Bescheid geben (notify.…) – je Sendung und Anlass nur einmal"""
+        dienste = [d for d in (self.cfg.get(CONF_MITTEILEN) or []) if d.startswith("notify.")]
+        if anlass not in MELDEN or not dienste:
+            return
+        gemeldet = self.index.setdefault("gemeldet", {})
+        schon = gemeldet.setdefault(b["id"], [])
+        if anlass in schon:
+            return
+        schon.append(anlass)
+        # nicht ewig wachsen lassen
+        ids = {x["id"] for x in self.index["briefe"]}
+        for k in [k for k in gemeldet if k not in ids]:
+            gemeldet.pop(k)
+        name = b.get("name") or b.get("absender") or b.get("sendung") or "Paket"
+        dienst = pakete.DIENSTE.get(b.get("dienst") or "", {}).get("name", "")
+        text = name + (f" ({dienst})" if dienst else "") + (f" – {b['status_text']}" if anlass == "problem" and b.get("status_text") else "")
+        daten = {"title": MELDEN[anlass], "message": text,
+                 "data": {"url": pakete.verfolgen(b.get("dienst") or "dhl", b.get("sendung", "")), "group": "pakete", "tag": f"paket-{b['id']}"}}
+        for d in dienste:
+            self.hass.async_create_task(self.hass.services.async_call("notify", d.split(".", 1)[1], daten, blocking=False))
+
+    async def async_umbenennen(self, brief_id: str, name: str) -> bool:
+        """Eigenen Namen für eine Sendung setzen ("" = wieder den Absender zeigen)"""
+        b = next((x for x in self.index["briefe"] if x["id"] == brief_id), None)
+        if not b:
+            return False
+        if name.strip():
+            b["name"] = name.strip()[:100]
+        else:
+            b.pop("name", None)
+        await self._speichern_jetzt()
+        return True
 
     async def async_erledigt(self, brief_id: str, erledigt: bool) -> bool:
         """Brief als angekommen markieren (oder zurücknehmen). False, wenn es ihn in diesem Konto nicht gibt."""
@@ -294,6 +436,12 @@ class BriefAbruf:
                 self.laeuft = False
             async_dispatcher_send(self.hass, f"{SIGNAL_NEU}_{self.entry.entry_id}")
             self._melden(neue)
+            # Paket-Mails mit „kommt heute“ usw.: Bescheid geben (am bekannten Eintrag, falls zusammengeführt)
+            for n in neue:
+                if n.get("art") == "paket" and n.get("stand") in MELDEN:
+                    b = next((x for x in self.index["briefe"] if x["id"] == n["id"] or (n.get("sendung") and x.get("sendung") == n["sendung"])), None)
+                    if b and b.get("stand") == n["stand"] and not self.ist_erledigt(b):
+                        self._mitteilen(b, n["stand"])
 
     @callback
     def _melden(self, neue: list[dict]) -> None:
@@ -327,6 +475,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(AbrufenAnsicht(hass))
         hass.http.register_view(SendungAnsicht(hass))
         hass.http.register_view(SendungEntfernenAnsicht(hass))
+        hass.http.register_view(SendungNameAnsicht(hass))
         daten["_ansichten"] = True
         _dienste_anmelden(hass)
 
@@ -338,6 +487,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if abrufer.cfg.get(CONF_DHL_SCHLUESSEL):
         entry.async_on_unload(async_track_time_interval(hass, abrufer.async_dhl_aktualisieren, timedelta(hours=1)))
         entry.async_on_unload(async_call_later(hass, timedelta(seconds=60), abrufer.async_dhl_aktualisieren))
+    # 17TRACK (nur mit eigenem Schlüssel): stündlich; Abfragen kosten kein Kontingent, nur neue Sendungen
+    if abrufer.cfg.get(CONF_SIEBZEHN):
+        entry.async_on_unload(async_track_time_interval(hass, abrufer.async_siebzehn_aktualisieren, timedelta(hours=1)))
+        entry.async_on_unload(async_call_later(hass, timedelta(seconds=90), abrufer.async_siebzehn_aktualisieren))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_neu_laden))
@@ -382,14 +535,15 @@ class BriefeAnsicht(HomeAssistantView):
                 continue
             konto = {"id": a.entry.entry_id, "name": a.name, "stand": a.index.get("stand", 0), "fehler": a.index.get("fehler", ""),
                      "zeiten": [f"{h:02d}:{m:02d}" for h, m in a.zeiten()], "naechster_abruf": a.naechster_abruf(), "laeuft": a.laeuft,
-                     "dhl_live": bool(a.cfg.get(CONF_DHL_SCHLUESSEL))}
+                     "dhl_live": bool(a.cfg.get(CONF_DHL_SCHLUESSEL)), "siebzehn": bool(a.cfg.get(CONF_SIEBZEHN)),
+                     **({"siebzehn_rest": a.index["siebzehn_rest"]} if "siebzehn_rest" in a.index else {})}
             konten.append(konto)
             briefe += [_fuer_api(a, b) for b in a.index["briefe"]]
             stand = max(stand, konto["stand"])
             fehler = fehler or (f"{a.name}: {konto['fehler']}" if konto["fehler"] else "")
         briefe.sort(key=lambda b: -b["datum"])
         konten.sort(key=lambda k: k["name"].lower())
-        return self.json({"stand": stand, "fehler": fehler, "konten": konten, "briefe": briefe, "version": 3,
+        return self.json({"stand": stand, "fehler": fehler, "konten": konten, "briefe": briefe, "version": 4,
                           "dienste": {k: v["name"] for k, v in pakete.DIENSTE.items()}})
 
 
@@ -500,6 +654,7 @@ def _fuer_api(a: BriefAbruf, b: dict) -> dict:
         erg["dienst_name"] = pakete.DIENSTE.get(erg["dienst"], {}).get("name", erg["dienst"])
         erg["verfolgen"] = pakete.verfolgen(erg["dienst"], b.get("sendung", ""))
         erg["kundenkonto"] = a.kundenkonto(b)
+        erg.pop("t17", None)
     return erg
 
 
@@ -559,6 +714,30 @@ class SendungEntfernenAnsicht(HomeAssistantView):
             return self.json_message("Ungültige ID", 400)
         for a in _abrufer(self.hass):
             if a.sichtbar_fuer(request.get("hass_user")) and await a.async_sendung_entfernen(brief_id):
+                return self.json({"id": brief_id})
+        return self.json_message("Sendung nicht gefunden", 404)
+
+
+class SendungNameAnsicht(HomeAssistantView):
+    """Sendung umbenennen: POST {"id", "name"} ("" = Absender zeigen)"""
+
+    url = "/api/briefankuendigung/sendung/name"
+    name = "api:briefankuendigung:sendung:name"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            daten = await request.json()
+        except ValueError:
+            return self.json_message("Ungültige Anfrage", 400)
+        brief_id = str(daten.get("id") or "") if isinstance(daten, dict) else ""
+        if not re.fullmatch(r"[0-9a-f]{20}", brief_id):
+            return self.json_message("Ungültige ID", 400)
+        for a in _abrufer(self.hass):
+            if a.sichtbar_fuer(request.get("hass_user")) and await a.async_umbenennen(brief_id, str(daten.get("name") or "")):
                 return self.json({"id": brief_id})
         return self.json_message("Sendung nicht gefunden", 404)
 

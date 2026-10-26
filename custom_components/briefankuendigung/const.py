@@ -19,6 +19,8 @@ CONF_EREIGNIS_ABSENDER = "ereignis_absender"  # Absender im Ereignis mitsenden (
 CONF_DIENSTE = "paketdienste"     # Paketdienste, deren Mails gelesen werden (dhl, hermes, dpd, amazon)
 CONF_KUNDENKONTEN = "kundenkonten"  # „adresse = Name“ je Zeile – z. B. zwei Amazon-Konten in einem Postfach
 CONF_DHL_SCHLUESSEL = "dhl_api_schluessel"  # optional: API-Schlüssel der DHL-Sendungsverfolgung (developer.dhl.com)
+CONF_SIEBZEHN = "siebzehn_schluessel"  # optional: Schlüssel der 17TRACK-API (Hermes, DPD, GLS, UPS … live)
+CONF_MITTEILEN = "mitteilen"      # Benachrichtigungsdienste (z. B. notify.mobile_app_iphone) für „kommt heute“ usw.
 
 EREIGNIS = f"{DOMAIN}_neu"        # je neuem Brief/Paket: konto, art, wichtig, datum (+ absender, falls erlaubt)
 ARCHIV_TAGE = 730                 # Archiv (nur Datum, Absender, Art) zwei Jahre aufheben

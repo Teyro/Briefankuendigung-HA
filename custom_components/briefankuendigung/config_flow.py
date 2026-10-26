@@ -15,7 +15,8 @@ from homeassistant.helpers.selector import (
 
 from . import abruf
 from .const import (
-    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_DIENSTE, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_NAME,
+    CONF_ABSENDER, CONF_BENUTZER, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_DIENSTE, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN,
+    CONF_NAME, CONF_SIEBZEHN,
     CONF_ORDNER, CONF_PAKET, CONF_PASSWORT, CONF_PORT, CONF_SERVER, CONF_TAGE, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, STANDARD,
 )
 from .pakete import ALLE as ALLE_DIENSTE, DIENSTE
@@ -28,7 +29,12 @@ async def _ha_benutzer(hass) -> list[SelectOptionDict]:
     return [SelectOptionDict(value=u.id, label=u.name or u.id) for u in await hass.auth.async_get_users() if not u.system_generated and u.is_active]
 
 
-def _optionen_schema(v: dict, benutzer: list[SelectOptionDict]) -> dict:
+def _melder(hass) -> list[str]:
+    """Benachrichtigungsdienste (notify.…) zur Auswahl, z. B. die Home-Assistant-App auf dem iPhone"""
+    return sorted(f"notify.{n}" for n in hass.services.async_services().get("notify", {}) if n not in ("send_message", "persistent_notification"))
+
+
+def _optionen_schema(v: dict, benutzer: list[SelectOptionDict], melder: list[str] | None = None) -> dict:
     return {
         vol.Optional(CONF_BENUTZER_HA, default=v.get(CONF_BENUTZER_HA, [])): SelectSelector(
             SelectSelectorConfig(options=benutzer, multiple=True, mode=SelectSelectorMode.LIST)),
@@ -42,6 +48,9 @@ def _optionen_schema(v: dict, benutzer: list[SelectOptionDict]) -> dict:
                                  mode=SelectSelectorMode.LIST)),
         vol.Optional(CONF_KUNDENKONTEN, default=v.get(CONF_KUNDENKONTEN, "")): TextSelector(TextSelectorConfig(multiline=True)),
         vol.Optional(CONF_DHL_SCHLUESSEL, default=v.get(CONF_DHL_SCHLUESSEL, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_SIEBZEHN, default=v.get(CONF_SIEBZEHN, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+        vol.Optional(CONF_MITTEILEN, default=v.get(CONF_MITTEILEN, [])): SelectSelector(
+            SelectSelectorConfig(options=sorted(set((melder or []) + list(v.get(CONF_MITTEILEN, [])))), multiple=True, custom_value=True)),
         vol.Optional(CONF_PAKET, default=v.get(CONF_PAKET, STANDARD[CONF_PAKET])): str,
         vol.Optional(CONF_WICHTIG, default=v.get(CONF_WICHTIG, STANDARD[CONF_WICHTIG])): TextSelector(TextSelectorConfig(multiline=True)),
         vol.Optional(CONF_EREIGNIS_ABSENDER, default=v.get(CONF_EREIGNIS_ABSENDER, STANDARD[CONF_EREIGNIS_ABSENDER])): BooleanSelector(),
@@ -68,7 +77,7 @@ class BriefConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_PASSWORT): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
             vol.Required(CONF_SERVER, default=v.get(CONF_SERVER, STANDARD[CONF_SERVER])): str,
             vol.Required(CONF_PORT, default=v.get(CONF_PORT, STANDARD[CONF_PORT])): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            **_optionen_schema(v, await _ha_benutzer(self.hass)),
+            **_optionen_schema(v, await _ha_benutzer(self.hass), _melder(self.hass)),
         })
         return self.async_show_form(step_id="user", data_schema=schema, errors=fehler)
 
@@ -98,4 +107,4 @@ class BriefOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         aktuell = {**STANDARD, **self.config_entry.data, **self.config_entry.options}
-        return self.async_show_form(step_id="init", data_schema=vol.Schema(_optionen_schema(aktuell, await _ha_benutzer(self.hass))))
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(_optionen_schema(aktuell, await _ha_benutzer(self.hass), _melder(self.hass))))

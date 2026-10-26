@@ -36,7 +36,7 @@ def test_dienst_von_absender(von: str, dienst: str) -> None:
 
 @pytest.mark.parametrize(("nummer", "dienst"), [
     ("TBA301234567890", "amazon"), ("302-1234567-7654321", "amazon"), ("00340434161094015902", "dhl"), ("JJD000390012345678", "dhl"),
-    ("H1002345678901234567", "hermes"), ("01234567890123", ""),
+    ("H1002345678901234567", "hermes"), ("01234567890123", ""), ("1Z999AA10123456784", "ups"),
 ])
 def test_dienst_von_nummer(nummer: str, dienst: str) -> None:
     assert pakete.dienst_von_nummer(nummer) == dienst
@@ -65,7 +65,11 @@ def test_verfolgen_und_konten() -> None:
 def test_dhl_status() -> None:
     a = {"shipments": [{"status": {"statusCode": "transit", "description": "Die Sendung wurde in das Zustellfahrzeug geladen."},
                         "estimatedTimeOfDelivery": "2026-10-21T12:00:00Z"}]}
-    assert pakete.dhl_status(a) == {"stand": "heute", "erwartet": "2026-10-21", "text": "Die Sendung wurde in das Zustellfahrzeug geladen."}
+    assert pakete.dhl_status(a) == {"stand": "heute", "erwartet": "2026-10-21", "text": "Die Sendung wurde in das Zustellfahrzeug geladen.",
+                                    "ereignisse": []}
+    a["shipments"][0]["events"] = [{"timestamp": "2026-10-21T07:00:00", "description": "In Zustellung",
+                                    "location": {"address": {"addressLocality": "Hamburg"}}}, {"timestamp": None}]
+    assert pakete.dhl_status(a)["ereignisse"] == [{"zeit": "2026-10-21T07:00:00", "text": "In Zustellung", "ort": "Hamburg"}]
     assert pakete.dhl_status({"shipments": [{"status": {"statusCode": "delivered"}}]})["stand"] == "zugestellt"
     assert pakete.dhl_status({}) is None
 
@@ -101,3 +105,23 @@ def test_nur_gewaehlte_dienste() -> None:
     finally:
         n.stop()
     assert [p["dienst"] for p in neu] == ["dpd"]
+
+
+def test_siebzehn_status_und_verlauf() -> None:
+    e = {"number": "H1", "track_info": {
+        "latest_status": {"status": "AvailableForPickup"},
+        "latest_event": {"description": "Liegt im Paketshop", "description_translation": {"description": "Liegt im Paketshop bereit"}},
+        "time_metrics": {"estimated_delivery_date": {"from": "2026-10-22T00:00:00+02:00"}},
+        "tracking": {"providers": [{"provider": {"name": "Hermes"}, "events": [
+            {"time_iso": "2026-10-20T10:00:00+02:00", "description": "Im Verteilzentrum", "location": "Ketzin"},
+            {"time_iso": "2026-10-21T09:00:00+02:00", "description": "Liegt im Paketshop"}]}]}}}
+    st = pakete.siebzehn_status(e)
+    assert st["stand"] == "abholbereit" and st["erwartet"] == "2026-10-22" and st["text"] == "Liegt im Paketshop bereit"
+    assert [x["text"] for x in st["ereignisse"]] == ["Liegt im Paketshop", "Im Verteilzentrum"] and not st["ende"]
+    assert pakete.siebzehn_status({"number": "x", "track_info": {"latest_status": {"status": "Delivered"}}})["ende"] is True
+    assert pakete.siebzehn_status({"track_info": {"latest_status": {"status": "Exception"}}})["problem"] is True
+    assert pakete.siebzehn_status("quatsch") is None
+    # zusammenführen: ohne Doppelte, neuestes zuerst
+    alt = [{"zeit": "2026-10-20T10:00:00+02:00", "text": "Im Verteilzentrum"}]
+    assert len(pakete.ereignisse_zusammen(alt, st["ereignisse"])) == 2
+    assert pakete.verfolgen("gls", "12345678901").startswith("https://gls-group.com/")

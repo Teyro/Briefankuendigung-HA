@@ -20,7 +20,9 @@
           "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)",
           "paketdienste": "Paketdienste (deren Mails werden gelesen)",
           "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
-          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)"
+          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)",
+          "siebzehn_schluessel": "17TRACK-Schlüssel (optional, api.17track.net – live Stand für Hermes, DPD, GLS, UPS; das Gratis-Kontingent sind einmalig 200 Sendungen)",
+          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)"
         }
       }
     },
@@ -48,7 +50,9 @@
           "ereignis_absender": "Absender im Ereignis „briefankuendigung_neu“ mitsenden (wird in der Home-Assistant-Datenbank gespeichert)",
           "paketdienste": "Paketdienste (deren Mails werden gelesen)",
           "kundenkonten": "Kundenkonten je Empfängeradresse, eine Zeile je Konto: adresse = Name (z. B. zwei Amazon-Konten in einem Postfach)",
-          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)"
+          "dhl_api_schluessel": "DHL-API-Schlüssel (optional, kostenlos auf developer.dhl.com – dann stündlich der genaue Stand)",
+          "siebzehn_schluessel": "17TRACK-Schlüssel (optional, api.17track.net – live Stand für Hermes, DPD, GLS, UPS; das Gratis-Kontingent sind einmalig 200 Sendungen)",
+          "mitteilen": "Mitteilungen bei „kommt heute“, „zur Abholung bereit“, „zugestellt“ und Problemen an (z. B. notify.mobile_app_iphone)"
         }
       }
     }
