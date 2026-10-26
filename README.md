@@ -79,6 +79,21 @@ die Mails. Anmeldungen bei Amazon & Co. werden bewusst nicht nachgebaut (Zwei-Fa
 
 Der Sensor **Angekündigte Pakete** hat das Attribut `nach_dienst` (z. B. `{"dhl": 1, "amazon": 2}`).
 
+## Kalender, Aufgabenliste, Dashboard-Karte, Sprachassistent (ab 1.6)
+
+- **Kalender „Lieferungen“**: erwartete Pakete als ganztägige Termine (mit Zeitfenster)
+- **Aufgabenliste „Pakete“**: abhaken = angekommen; neuer Eintrag „Sendungsnummer Name“ = Sendung verfolgen
+- **Sensor „Paket in Zustellung“**: an, solange ein Paket heute kommt – z. B. für ein Licht an der Haustür
+- **Dashboard-Karte** ohne Zusatz-Installation: `type: custom:paketbote-card` (Optionen `titel`, `konto`, `zugestellt`, `hinzufuegen`)
+- **Aktion `briefankuendigung.heute`** (mit Antwort): Satz und Zahlen für den Sprachassistenten
+- **Ereignis `briefankuendigung_paket`** bei jedem neuen Stand (`stand`, `vorher`, `dienst`, `erwartet`)
+- **Vorlagen** (Blueprints) in [`blueprints/automation/briefankuendigung`](blueprints/automation/briefankuendigung):
+  Sprachassistent („Welche Pakete kommen heute?“), Licht bei Zustellung, Ansage bzw. Mitteilung bei neuem Stand
+
+**Live-Stand ohne Mail:** DHL und Deutsche Post fragt die Integration ohne Schlüssel über die öffentliche
+Sendungsverfolgung (dhl.de, ersatzweise deutschepost.de). Weitere Quellen der Reihe nach, wenn eingetragen:
+DHL-Schlüssel, 17TRACK, UPS-Zugang, Ship24, öffentliche Seiten von GLS und DPD. Fällt eine aus, springt die nächste ein.
+
 ## Automationen
 
 Je neuem Brief oder Paket feuert das Ereignis `briefankuendigung_neu` mit `konto`, `art` (`brief`/`paket`),
