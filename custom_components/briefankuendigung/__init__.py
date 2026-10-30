@@ -57,6 +57,7 @@ GLS_SEITEN = ("https://gls-group.com/app/service/open/rest/DE/de/rstt001", "http
 DHL_SEITEN = ("https://www.dhl.de/int-verfolgen/data/search", "https://www.deutschepost.de/int-verfolgen/data/search")
 DPD_SEITE = "https://tracking.dpd.de/rest/plc/de_DE/"
 BROWSER = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Briefankuendigung/1.6"
+STUFE = {"unterwegs": 1, "heute": 3, "abholbereit": 3, "zugestellt": 4}
 PAKET_TAGE = 60          # nicht zugestellte Pakete so lange behalten (auch wenn keine Mail mehr kommt)
 MELDEN = {"heute": "📦 Kommt heute", "abholbereit": "📦 Zur Abholung bereit", "zugestellt": "📦 Zugestellt", "problem": "⚠️ Problem mit der Sendung"}
 
@@ -194,22 +195,41 @@ class BriefAbruf:
         await self.hass.async_add_executor_job(self._index_schreiben)
         async_dispatcher_send(self.hass, f"{SIGNAL_NEU}_{self.entry.entry_id}")
 
-    async def async_sendung_hinzufuegen(self, nummer: str, dienst: str = "", name: str = "") -> dict:
-        """Sendung von Hand verfolgen (z. B. die Nummer aus einer Bestellbestätigung). Spätere Mails dazu aktualisieren sie."""
+    async def async_sendung_hinzufuegen(self, nummer: str, dienst: str = "", name: str = "", stand: dict | None = None) -> dict:
+        """Sendung von Hand verfolgen (z. B. die Nummer aus einer Bestellbestätigung). Spätere Mails dazu aktualisieren sie.
+        `stand` (ab 1.8, von den Apps): was das Gerät selbst über die Sendung weiß – {"stand", "ereignisse", "text", "erwartet",
+        "zeitfenster", "problem", "ruecksendung", "erledigt"}. So sehen alle Geräte denselben Stand."""
         nummer = re.sub(r"\s+", "", nummer or "").upper()
         dienst = dienst or pakete.dienst_von_nummer(nummer)
         if not re.fullmatch(r"[A-Z0-9-]{6,35}", nummer) or dienst not in pakete.DIENSTE:
             raise ValueError("nummer" if dienst in pakete.DIENSTE or not nummer else "dienst")
         vorhanden = next((b for b in self.index["briefe"] if b.get("art") == "paket" and (b.get("sendung") or "").upper() == nummer), None)
+        st = app_stand(stand)
         if vorhanden:
             if name and not vorhanden.get("absender"):
                 vorhanden["absender"] = name
+            if st.get("stand") and STUFE.get(st["stand"], 0) >= STUFE.get(vorhanden.get("stand") or "unterwegs", 0):
+                self._live_uebernehmen(vorhanden, st)
+            if st.get("ruecksendung"):
+                vorhanden["ruecksendung"] = True
+            if st.get("erledigt") and not self.ist_erledigt(vorhanden):
+                self.index.setdefault("erledigt", {})[vorhanden["id"]] = int(time.time() * 1000)
             await self._speichern_jetzt()
             return vorhanden
         b = {"id": pakete.sendung_id(dienst, nummer), "datum": int(time.time() * 1000), "art": "paket", "absender": (name or "")[:100],
              "betreff": "", "bild": None, "sendung": nummer, "stand": "unterwegs", "dienst": dienst, "manuell": True}
+        if st.get("stand"):
+            # neue Sendung mit bekanntem Stand (z. B. schon zugestellt): übernehmen, ohne Mitteilung
+            b.update({k: v for k, v in (("stand", st["stand"]), ("ereignisse", st.get("ereignisse")), ("status_text", st.get("text")),
+                                        ("erwartet", st.get("erwartet")), ("zeitfenster", st.get("zeitfenster")),
+                                        ("problem", st.get("problem")), ("ruecksendung", st.get("ruecksendung"))) if v})
+            b["anbieter"] = "App"
         self.index["briefe"].insert(0, b)
+        if st.get("erledigt"):
+            self.index.setdefault("erledigt", {})[b["id"]] = int(time.time() * 1000)
         await self._speichern_jetzt()
+        if b["stand"] == "zugestellt":
+            return b
         if dienst == "dhl" and self.cfg.get(CONF_DHL_SCHLUESSEL):
             self.hass.async_create_task(self.async_dhl_aktualisieren())
         elif dienst in pakete.SIEBZEHN and self.cfg.get(CONF_SIEBZEHN):
@@ -810,6 +830,25 @@ class AbrufenAnsicht(HomeAssistantView):
         return self.json({"gestartet": gestartet}, status_code=202 if gestartet else 200)
 
 
+def app_stand(d) -> dict:
+    """Stand, den eine App mitschickt, prüfen und auf das eigene Format bringen ({} = nichts Brauchbares)"""
+    if not isinstance(d, dict):
+        return {}
+    stand = str(d.get("stand") or "")
+    erg = {"ruecksendung": bool(d.get("ruecksendung")), "erledigt": bool(d.get("erledigt"))}
+    if stand not in STUFE:
+        return erg if erg["ruecksendung"] or erg["erledigt"] else {}
+    ereignisse = []
+    for e in (d.get("ereignisse") or [])[:40] if isinstance(d.get("ereignisse"), list) else []:
+        if isinstance(e, dict) and e.get("text"):
+            ereignisse.append({"zeit": str(e.get("zeit") or "")[:40], "text": str(e["text"])[:300], "ort": str(e.get("ort") or "")[:100]})
+    erwartet = str(d.get("erwartet") or "")
+    erg.update({"stand": stand, "ereignisse": ereignisse, "text": str(d.get("text") or "")[:300],
+                "erwartet": erwartet if re.fullmatch(r"\d{4}-\d{2}-\d{2}", erwartet) else "",
+                "zeitfenster": str(d.get("zeitfenster") or "")[:40], "problem": bool(d.get("problem"))})
+    return erg
+
+
 def _fuer_api(a: BriefAbruf, b: dict) -> dict:
     """Ein Brief bzw. eine Sendung für Widget und Apps (mit Dienst, Kundenkonto und Link zur Sendungsverfolgung)."""
     erg = {**b, "art": b.get("art", "brief"), "bild": bool(b.get("bild")), "wichtig": a.ist_wichtig(b["absender"]),
@@ -855,7 +894,7 @@ def _abrufer_fuer(hass: HomeAssistant, benutzer, konto: str) -> BriefAbruf | Non
 
 
 class SendungAnsicht(HomeAssistantView):
-    """Sendung von Hand verfolgen: POST {"nummer", "dienst"?, "name"?, "konto"?}"""
+    """Sendung von Hand verfolgen: POST {"nummer", "dienst"?, "name"?, "konto"?, "stand_info"? (ab 1.8: Stand des Geräts)}"""
 
     url = "/api/briefankuendigung/sendung"
     name = "api:briefankuendigung:sendung"
@@ -875,7 +914,8 @@ class SendungAnsicht(HomeAssistantView):
         if not a:
             return self.json_message("Postfach nicht gefunden", 404)
         try:
-            b = await a.async_sendung_hinzufuegen(str(daten.get("nummer") or ""), str(daten.get("dienst") or ""), str(daten.get("name") or ""))
+            b = await a.async_sendung_hinzufuegen(str(daten.get("nummer") or ""), str(daten.get("dienst") or ""), str(daten.get("name") or ""),
+                                                  daten.get("stand_info"))
         except ValueError as e:
             return self.json_message("Paketdienst nicht erkannt – bitte angeben" if str(e) == "dienst" else "Ungültige Sendungsnummer", 400)
         return self.json(_fuer_api(a, b))
@@ -983,6 +1023,6 @@ async def _karte_anmelden(hass: HomeAssistant) -> None:
         from homeassistant.components.http import StaticPathConfig
         pfad = os.path.join(os.path.dirname(__file__), "www", "paketbote-card.js")
         await hass.http.async_register_static_paths([StaticPathConfig(KARTE_URL, pfad, False)])
-        add_extra_js_url(hass, f"{KARTE_URL}?v=1.7.0")
+        add_extra_js_url(hass, f"{KARTE_URL}?v=1.8.0")
     except Exception as e:  # noqa: BLE001 – ohne Karte geht der Rest trotzdem
         _LOGGER.warning("Briefankündigung: Dashboard-Karte nicht angemeldet: %s", e)

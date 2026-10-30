@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
@@ -490,4 +490,40 @@ async def test_niemand_da_abholung_rueckgabe(hass: HomeAssistant, hass_client, t
     antwort = await hass.services.async_call("calendar", "get_events", {"entity_id": kal, "start_date_time": "2099-01-04 00:00:00",
                                                                          "end_date_time": "2099-01-06 00:00:00"}, blocking=True, return_response=True)
     assert [e["summary"] for e in antwort[kal]["events"]] == ["📦 Abholen bis heute: Thalia (DHL)"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_app_abgleich_mit_stand(hass: HomeAssistant, hass_client, tmp_path) -> None:
+    """1.8: Apps schicken ihren Stand mit – fertige Sendungen erscheinen auf allen Geräten, der Stand geht nie zurück."""
+    hass.config.config_dir = str(tmp_path)
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de")
+    entry.add_to_hass(hass)
+    with patch.object(abruf, "abrufen", return_value=([], set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    a = hass.data[DOMAIN][entry.entry_id]
+    a.async_ersatz_aktualisieren = AsyncMock()   # keine Abfragen ins Netz
+    client = await hass_client()
+    verlauf = [{"zeit": "2026-10-28T11:02:00+01:00", "text": "Die Sendung wurde zugestellt.", "ort": "Hamburg"}]
+    r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "00340434161094015902", "dienst": "dhl", "name": "Thalia",
+                                                                   "stand_info": {"stand": "zugestellt", "ereignisse": verlauf, "erledigt": True}})
+    assert r.status == 200
+    b = await r.json()
+    assert b["stand"] == "zugestellt" and b["erledigt"] is True and b["ereignisse"][0]["ort"] == "Hamburg"
+
+    # zweites Gerät: unterwegs → abholbereit; älterer Stand überschreibt nichts
+    r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "H1002345678901234567", "dienst": "hermes",
+                                                                   "stand_info": {"stand": "unterwegs", "ereignisse": []}})
+    assert (await r.json())["stand"] == "unterwegs"
+    await client.post("/api/briefankuendigung/sendung", json={"nummer": "H1002345678901234567", "dienst": "hermes",
+                                                              "stand_info": {"stand": "abholbereit", "text": "Liegt im Paketshop"}})
+    await client.post("/api/briefankuendigung/sendung", json={"nummer": "H1002345678901234567", "dienst": "hermes",
+                                                              "stand_info": {"stand": "unterwegs", "erwartet": "kaputt"}})
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    hermes = next(x for x in daten["briefe"] if x.get("sendung") == "H1002345678901234567")
+    assert hermes["stand"] == "abholbereit" and hermes["status_text"] == "Liegt im Paketshop"
+    assert len([x for x in daten["briefe"] if x.get("art") == "paket"]) == 2
+    # ungültiger Stand wird ignoriert, die Sendung trotzdem angelegt
+    r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "01234567890123", "dienst": "dpd", "stand_info": {"stand": "<x>"}})
+    assert (await r.json())["stand"] == "unterwegs"
     assert await hass.config_entries.async_unload(entry.entry_id)
