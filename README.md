@@ -65,7 +65,7 @@ selben Sendung ergeben einen Eintrag mit Verlauf.
 - **Hat jedes Konto ein eigenes Postfach,** die Integration einfach je Postfach hinzufügen (siehe unten).
 
 **Sendung von Hand:** Für Pakete ohne Mail (z. B. Kleinanzeigen) die Nummer selbst eintragen – in den
-Desktop-Apps und im Widget über „Sendung hinzufügen“ oder per Aktion:
+App [Post & Pakete](https://github.com/Teyro/Post-und-Pakete) über „Sendung hinzufügen“ oder per Aktion:
 
 ```yaml
 action: briefankuendigung.sendung_hinzufuegen
@@ -93,6 +93,21 @@ Der Sensor **Angekündigte Pakete** hat das Attribut `nach_dienst` (z. B. `{"dhl
 **Live-Stand ohne Mail:** DHL und Deutsche Post fragt die Integration ohne Schlüssel über die öffentliche
 Sendungsverfolgung (dhl.de, ersatzweise deutschepost.de). Weitere Quellen der Reihe nach, wenn eingetragen:
 DHL-Schlüssel, 17TRACK, UPS-Zugang, Ship24, öffentliche Seiten von GLS und DPD. Fällt eine aus, springt die nächste ein.
+
+## Abholen, Rückgabe, niemand zu Hause (ab 1.7)
+
+- **Abholcode und Abholstelle** (Packstation, Paketshop, Filiale, Amazon Locker) werden aus den Mails gelesen –
+  Felder `abholcode`, `abholort`, `abholadresse`, `abholfrist`. Die App zeigt den Code groß (auch im Widget und in
+  der Live-Aktivität), die Dashboard-Karte ebenfalls.
+- **Rücksendefrist:** Für bekannte Shops (Zalando 100 Tage, IKEA 365, Amazon 30 …) rechnet die Integration nach der
+  Zustellung `ruecksendefrist` aus – ohne Gewähr, maßgeblich sind die Bedingungen des Shops.
+- **Kalender** „Lieferungen“ bekommt dazu Termine „📦 Abholen bis …“ und „↩︎ Rückgabe bis …“.
+- **Niemand zu Hause** (Option unter *Konfigurieren*): Kommt heute ein Paket und ist keine Person zu Hause, gibt es
+  morgens (7:30) bzw. beim Verlassen des Hauses einmal am Tag eine Mitteilung und das Ereignis `briefankuendigung_niemand_da`.
+
+**Wo sehe ich zugestellte Pakete?** Pakete sind keine eigenen Entitäten. Zugestellte bzw. als angekommen markierte
+Sendungen stehen in der Aufgabenliste **Pakete** unter *Erledigt*, auf der Dashboard-Karte unter *Angekommen*
+(Option `zugestellt`) und in der App.
 
 ## Automationen
 
