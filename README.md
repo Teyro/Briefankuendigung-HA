@@ -116,14 +116,14 @@ automation:
 
 Oder einfach mit dem Sensor **Post heute** (z. B. eine Lampe leuchtet, solange er `on` ist).
 
-## iPhone-Widget
+## App: Post & Pakete
 
-Skript „Briefankuendigung“ in Scriptable: beim ersten Start die Adresse deines Home Assistant und ein
-langlebiges Zugriffstoken (Profil → Sicherheit) eingeben. Mit mehreren Postfächern zeigt das Widget alle
-(mit Namen auf jeder Karte) oder nur eins – im Skript unter „Postfach“ oder pro Widget mit dem Namen als
-Widget-Parameter, z. B. `johanna`.
+Die passende App für **iPhone, iPad, Apple Watch, Mac und Linux** (mit Plasma-Widget) ist
+**[Post & Pakete](https://github.com/Teyro/Post-und-Pakete)**: Briefe mit Umschlagbild und Pakete in einer Liste,
+Widgets, Siri, Mitteilungen. Beim ersten Start Adresse von Home Assistant und ein langlebiges Zugriffstoken
+(Profil → Sicherheit) eintragen. Mit mehreren Postfächern zeigt sie alle oder nur eins.
 
-## Schnittstelle (für das Widget)
+## Schnittstelle (für die App)
 
 Alle Adressen brauchen ein gültiges Home-Assistant-Token und zeigen nur Postfächer, die der Benutzer sehen darf.
 
