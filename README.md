@@ -105,6 +105,10 @@ DHL-Schlüssel, 17TRACK, UPS-Zugang, Ship24, öffentliche Seiten von GLS und DPD
 - **Niemand zu Hause** (Option unter *Konfigurieren*): Kommt heute ein Paket und ist keine Person zu Hause, gibt es
   morgens (7:30) bzw. beim Verlassen des Hauses einmal am Tag eine Mitteilung und das Ereignis `briefankuendigung_niemand_da`.
 
+**Alle Geräte gleich (ab 1.8):** Was du in der App Post & Pakete auf einem Gerät einträgst – auch eine schon
+zugestellte Sendung – schickt die App samt Stand und Verlauf an Home Assistant. Die anderen Geräte (Linux, Mac,
+iPhone) zeigen sie beim nächsten Laden. Der Stand geht dabei nie zurück.
+
 **Wo sehe ich zugestellte Pakete?** Pakete sind keine eigenen Entitäten. Zugestellte bzw. als angekommen markierte
 Sendungen stehen in der Aufgabenliste **Pakete** unter *Erledigt*, auf der Dashboard-Karte unter *Angekommen*
 (Option `zugestellt`) und in der App.
@@ -149,7 +153,7 @@ Alle Adressen brauchen ein gültiges Home-Assistant-Token und zeigen nur Postfä
 | `GET /api/briefankuendigung/archiv[?q=&konto=]` | Archiv der letzten zwei Jahre |
 | `POST /api/briefankuendigung/erledigt` | `{"id": "…", "erledigt": true}` – als angekommen markieren |
 | `POST /api/briefankuendigung/abrufen[?konto=]` | Postfach jetzt lesen (höchstens einmal pro Minute) |
-| `POST /api/briefankuendigung/sendung` | `{"nummer": "…", "dienst": "dpd", "name": "…", "konto": "…"}` – Sendung von Hand verfolgen (ab 1.4) |
+| `POST /api/briefankuendigung/sendung` | `{"nummer": "…", "dienst": "dpd", "name": "…", "konto": "…", "stand_info": {…}}` – Sendung von Hand verfolgen (ab 1.4); ab 1.8 mit dem Stand des Geräts (`stand`, `ereignisse`, `text`, `erwartet`, `erledigt` …) |
 | `POST /api/briefankuendigung/sendung/entfernen` | `{"id": "…"}` – eigene Sendung entfernen (aus Mails: als angekommen markieren) |
 
 Pakete haben ab 1.4 zusätzlich `dienst`, `dienst_name`, `erwartet` (`2026-10-23`), `zeitfenster`, `kundenkonto`,
