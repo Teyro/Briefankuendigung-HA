@@ -148,7 +148,8 @@ def werte_aus(roh: bytes, oeffnen=urllib.request.urlopen, art: str = "brief", di
         # Bilder in Paket-Mails sind Werbung/Logos – keine Vorschau
         return {"id": bid, "datum": datum, "art": "paket", "absender": infos["absender"], "betreff": betreff,
                 "bild": None, "bild_typ": None, "sendung": infos["sendung"], "stand": infos["stand"], "dienst": dienst,
-                "erwartet": infos["erwartet"], "zeitfenster": infos["zeitfenster"], "empfaenger": an[0] if an else ""}
+                "erwartet": infos["erwartet"], "zeitfenster": infos["zeitfenster"], "empfaenger": an[0] if an else "",
+                **{k: infos[k] for k in ("abholcode", "abholort", "abholadresse", "abholfrist") if infos.get(k)}}
 
     absender = brief_absender(plain_text) or brief_absender(ohne_html(html_text))
     bild = max(bilder, key=lambda b: len(b[0])) if bilder else None
@@ -252,7 +253,7 @@ def paket_zusammenfuehren(alt: dict, neu: dict) -> None:
     alt["datum"] = max(alt["datum"], neu["datum"])
     if not alt.get("absender") and neu.get("absender"):
         alt["absender"] = neu["absender"]
-    for k in ("erwartet", "zeitfenster", "dienst", "empfaenger"):
+    for k in ("erwartet", "zeitfenster", "dienst", "empfaenger", "abholcode", "abholort", "abholadresse", "abholfrist"):
         if neu.get(k) and (k != "dienst" or not alt.get(k)):
             alt[k] = neu[k]
 

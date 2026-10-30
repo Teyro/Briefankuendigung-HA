@@ -30,6 +30,7 @@ function standText(b) {
   if (b.problem) return T("Problem bei der Zustellung", "delivery problem");
   return (b.ereignisse || []).length ? T("unterwegs", "on the way") : T("angekündigt", "announced");
 }
+const datum = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ""); return m ? +m[3] + "." + +m[2] + "." : iso; };
 const stufe = (b) => (b.stand === "zugestellt" ? 4 : b.stand === "heute" || b.stand === "abholbereit" ? 3 : (b.ereignisse || []).length ? 2 : 1);
 const heute = (b) => !b.erledigt && b.stand !== "zugestellt" && (b.stand === "heute" || b.stand === "abholbereit" || b.erwartet === isoTag(new Date()));
 
@@ -89,9 +90,14 @@ class PaketboteCard extends HTMLElement {
           <div class="text"><div class="titel">${esc(b.name || b.absender || b.sendung || T("Paket", "Parcel"))}</div>
             <div class="stand ${art}">${esc(standText(b))}${b.kundenkonto ? " · " + esc(b.kundenkonto) : ""}</div>
             ${b.erledigt || b.stand === "zugestellt" ? "" : `<div class="balken">${[1, 2, 3, 4].map((i) => `<i class="${i <= stufe(b) ? "an" : ""}"></i>`).join("")}</div>`}
+            ${b.ruecksendefrist && (b.erledigt || b.stand === "zugestellt") ? `<div class="leise">${T("Rückgabe bis", "Return by")} ${esc(datum(b.ruecksendefrist))}</div>` : ""}
           </div>
+          ${b.abholcode && b.stand === "abholbereit" && !b.erledigt ? `<div class="code" title="${T("Abholcode", "Pickup code")}">${esc(b.abholcode)}</div>` : ""}
         </div>
         ${auf ? `<div class="detail">${b.status_text ? `<p>${esc(b.status_text)}</p>` : ""}
+          ${b.abholort || b.abholadresse ? `<p class="abholen"><b>${esc(b.abholort || T("Abholstelle", "Pickup point"))}</b>${b.abholadresse ? "<br>" + esc(b.abholadresse) : ""}
+            ${b.abholfrist ? `<br>${T("Abholen bis", "Pick up by")} ${esc(datum(b.abholfrist))}` : ""}
+            ${b.abholadresse ? `<br><a href="https://www.openstreetmap.org/search?query=${encodeURIComponent(b.abholadresse)}" target="_blank" rel="noopener">${T("Auf der Karte", "On the map")}</a>` : ""}</p>` : ""}
           ${ev ? `<ul>${ev}</ul>` : `<p class="leise">${T("Noch keine Stationen bekannt.", "No stops known yet.")}</p>`}
           <div class="knoepfe">${b.verfolgen ? `<a href="${esc(b.verfolgen)}" target="_blank" rel="noopener">${T("Beim Dienst", "Carrier site")}</a>` : ""}
           ${b.sendung ? `<span class="leise">${esc(b.sendung)}</span>` : ""}</div></div>` : ""}
@@ -113,7 +119,9 @@ class PaketboteCard extends HTMLElement {
       .detail li{padding:0 0 8px 12px;position:relative}.detail li:before{content:"";position:absolute;left:-6px;top:4px;width:10px;height:10px;border-radius:50%;background:var(--disabled-text-color,#999)}
       .detail li:first-child:before{background:var(--primary-color)}.detail li span{display:block;font-size:.85em;color:var(--secondary-text-color)}
       .knoepfe{display:flex;gap:12px;align-items:center;margin-top:4px}.knoepfe a{color:var(--primary-color);font-weight:600;text-decoration:none}
-      .leise{color:var(--secondary-text-color);font-size:.9em}.fehler{color:var(--error-color,#db4437)}
+      .leise{color:var(--secondary-text-color);font-size:.9em}
+      .code{font:700 1.35em/1 ui-monospace,monospace;letter-spacing:.12em;padding:8px 10px;border-radius:10px;background:var(--warning-color,#f57c00);color:#fff;flex:none}
+      .abholen{background:var(--secondary-background-color);border-radius:10px;padding:8px 10px}.fehler{color:var(--error-color,#db4437)}
       form{display:flex;gap:6px;margin-top:12px}input{flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid var(--divider-color);background:var(--card-background-color);color:var(--primary-text-color)}
       button{padding:8px 12px;border-radius:8px;border:0;background:var(--primary-color);color:var(--text-primary-color,#fff);font-weight:600;cursor:pointer}
     </style><ha-card>

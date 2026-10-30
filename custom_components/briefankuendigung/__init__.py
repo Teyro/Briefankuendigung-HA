@@ -42,12 +42,13 @@ from homeassistant.util import dt as dt_util
 
 from . import abruf, pakete
 from .const import (
-    ARCHIV_TAGE, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
+    ARCHIV_TAGE, CONF_ABWESEND, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
     CONF_OEFFENTLICH, CONF_SHIP24, CONF_SIEBZEHN, CONF_TAGE, CONF_UPS_GEHEIM, CONF_UPS_ID, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS,
     EREIGNIS_PAKET, SIGNAL_NEU, STANDARD,
 )
 
-PAKET_FELDER = ("sendung", "stand", "dienst", "erwartet", "zeitfenster", "empfaenger", "manuell", "status_text")
+PAKET_FELDER = ("sendung", "stand", "dienst", "erwartet", "zeitfenster", "empfaenger", "manuell", "status_text",
+                "abholcode", "abholort", "abholadresse", "abholfrist")
 DHL_API = "https://api-eu.dhl.com/track/shipments"
 SIEBZEHN_API = "https://api.17track.net/track/v2.2"
 UPS_API = "https://onlinetools.ups.com"
@@ -284,6 +285,33 @@ class BriefAbruf:
             self._mitteilen(b, b["stand"])
             self._stand_ereignis(b, vorher)
         return geaendert
+
+    @callback
+    def niemand_da_pruefen(self, *_args) -> None:
+        """Kommt heute ein Paket (nicht zur Abholung) und ist laut Home Assistant niemand zu Hause? Dann einmal am Tag Bescheid geben."""
+        if not self.cfg.get(CONF_ABWESEND):
+            return
+        personen = [self.hass.states.get(e) for e in self.hass.states.async_entity_ids("person")]
+        personen = [p for p in personen if p is not None and p.state not in ("unknown", "unavailable")]
+        if not personen or any(p.state == "home" for p in personen):
+            return
+        tag = dt_util.now().date().isoformat()
+        heute = [b for b in self.index["briefe"] if b.get("art") == "paket" and not self.ist_erledigt(b) and b.get("stand") != "zugestellt"
+                 and b.get("stand") != "abholbereit" and (b.get("stand") == "heute" or b.get("erwartet") == tag)]
+        if not heute or self.index.get("niemand_da_gemeldet") == tag:
+            return
+        self.index["niemand_da_gemeldet"] = tag
+        self.hass.async_create_task(self._speichern_jetzt())
+        self.hass.bus.async_fire(f"{DOMAIN}_niemand_da", {"konto": self.name, "anzahl": len(heute)})
+        b = heute[0]
+        name = b.get("name") or b.get("absender") or "Ein Paket"
+        dienst = pakete.DIENSTE.get(b.get("dienst") or "dhl", {}).get("name", "")
+        daten = {"title": "📦 Heute kommt ein Paket – niemand ist zu Hause",
+                 "message": f"{name}{f' ({dienst})' if dienst else ''}" + (f" und {len(heute) - 1} weitere" if len(heute) > 1 else "")
+                            + ". Wunschnachbar oder Ablageort festlegen?",
+                 "data": {"url": pakete.paketsteuerung(b.get("dienst") or "dhl", b.get("sendung", "")), "group": "pakete", "tag": "niemand-da"}}
+        for d in [d for d in (self.cfg.get(CONF_MITTEILEN) or []) if d.startswith("notify.")]:
+            self.hass.async_create_task(self.hass.services.async_call("notify", d.split(".", 1)[1], daten, blocking=False))
 
     @callback
     def _stand_ereignis(self, b: dict, vorher: str | None) -> None:
@@ -622,6 +650,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(async_call_later(hass, timedelta(seconds=90), abrufer.async_siebzehn_aktualisieren))
     # Ersatz (UPS, Ship24, öffentliche Seiten): stündlich – fragt nur Sendungen, zu denen seit 3 Stunden nichts kam
     entry.async_on_unload(async_track_time_interval(hass, abrufer.async_ersatz_aktualisieren, timedelta(hours=1)))
+    # „Niemand zu Hause“: morgens um 7:30 und immer, wenn jemand das Haus verlässt
+    if abrufer.cfg.get(CONF_ABWESEND):
+        from homeassistant.helpers.event import async_track_state_change_event
+        entry.async_on_unload(async_track_time_change(hass, abrufer.niemand_da_pruefen, hour=7, minute=30, second=0))
+        entry.async_on_unload(async_track_state_change_event(hass, hass.states.async_entity_ids("person"), abrufer.niemand_da_pruefen))
     entry.async_on_unload(async_call_later(hass, timedelta(seconds=150), abrufer.async_ersatz_aktualisieren))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -786,9 +819,30 @@ def _fuer_api(a: BriefAbruf, b: dict) -> dict:
         erg["dienst_name"] = pakete.DIENSTE.get(erg["dienst"], {}).get("name", erg["dienst"])
         erg["verfolgen"] = pakete.verfolgen(erg["dienst"], b.get("sendung", ""))
         erg["kundenkonto"] = a.kundenkonto(b)
+        erg["ruecksendefrist"] = ruecksendefrist(b)
         erg.pop("t17", None)
         erg.pop("live_zeit", None)
     return erg
+
+
+def zustelltag(b: dict):
+    """Tag der Zustellung (letzte Station bzw. letzte Meldung) – None, wenn nicht zugestellt"""
+    from datetime import datetime as _dt
+    if b.get("stand") != "zugestellt":
+        return None
+    for e in b.get("ereignisse") or []:
+        try:
+            return _dt.fromisoformat(str(e.get("zeit"))[:19]).date()
+        except ValueError:
+            continue
+    return dt_util.utc_from_timestamp(b["datum"] / 1000).date()
+
+
+def ruecksendefrist(b: dict) -> str:
+    """Bis wann zurückschicken (Shop-Regeln in pakete.RUECKGABE_TAGE; Rücksendungen selbst haben keine)"""
+    if b.get("art") != "paket" or b.get("ruecksendung"):
+        return ""
+    return pakete.ruecksendefrist(b.get("name") or b.get("absender") or "", b.get("dienst") or "", zustelltag(b))
 
 
 def _abrufer_fuer(hass: HomeAssistant, benutzer, konto: str) -> BriefAbruf | None:
@@ -929,6 +983,6 @@ async def _karte_anmelden(hass: HomeAssistant) -> None:
         from homeassistant.components.http import StaticPathConfig
         pfad = os.path.join(os.path.dirname(__file__), "www", "paketbote-card.js")
         await hass.http.async_register_static_paths([StaticPathConfig(KARTE_URL, pfad, False)])
-        add_extra_js_url(hass, f"{KARTE_URL}?v=1.6.0")
+        add_extra_js_url(hass, f"{KARTE_URL}?v=1.7.0")
     except Exception as e:  # noqa: BLE001 – ohne Karte geht der Rest trotzdem
         _LOGGER.warning("Briefankündigung: Dashboard-Karte nicht angemeldet: %s", e)

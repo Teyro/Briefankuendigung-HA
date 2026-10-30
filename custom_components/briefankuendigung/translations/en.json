@@ -26,7 +26,8 @@
           "ship24_schluessel": "Ship24 key (optional, fallback for 17TRACK)",
           "ups_client_id": "UPS client ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS client secret",
-          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)"
+          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)",
+          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)"
         }
       }
     },
@@ -60,7 +61,8 @@
           "ship24_schluessel": "Ship24 key (optional, fallback for 17TRACK)",
           "ups_client_id": "UPS client ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS client secret",
-          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)"
+          "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)",
+          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)"
         }
       }
     }

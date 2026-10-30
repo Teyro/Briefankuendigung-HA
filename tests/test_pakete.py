@@ -158,3 +158,21 @@ def test_dhl_ohne_schluessel() -> None:
     assert pakete.dhl_oeffentlich_status({"sendungen": []}) is None
     assert pakete._stand_aus_text("Die Sendung konnte nicht zugestellt werden und wird in eine Packstation gebracht.") == "unterwegs"
     assert pakete._stand_aus_text("Die Sendung liegt in der Packstation zur Abholung bereit.") == "abholbereit"
+
+
+def test_abholung_und_ruecksendefrist() -> None:
+    t = "Ihre Sendung liegt zur Abholung bereit.\nPackstation 123\nMusterstraße 12\n20095 Hamburg\nIhr Abholcode lautet: 482913\nBitte holen Sie die Sendung bis zum 07.11. ab."
+    assert pakete.abholung(t, date(2026, 10, 30)) == {"abholcode": "482913", "abholort": "Packstation 123",
+                                                      "abholadresse": "Musterstraße 12, 20095 Hamburg", "abholfrist": "2026-11-07"}
+    a = pakete.abholung("Ihr Paket ist im Amazon Locker - Lotte. Abholcode: 123456. Abholung bis Montag, 3.11.", date(2026, 10, 30))
+    assert a["abholcode"] == "123456" and a["abholort"] == "Amazon Locker – Lotte" and a["abholfrist"] == "2026-11-03"
+    f = pakete.abholung("Ihre Sendung wurde in die Postfiliale gebracht: Postfiliale 512, Wandsbeker Marktstraße 1, 22041 Hamburg-Wandsbek.", date(2026, 10, 30))
+    assert f["abholort"] == "Postfiliale 512" and f["abholadresse"] == "Wandsbeker Marktstraße 1, 22041 Hamburg-Wandsbek"
+    assert pakete.abholung("Ihr Paket ist unterwegs. Sendungsnummer 00340434161094015902", date(2026, 10, 30)) == \
+        {"abholcode": "", "abholort": "", "abholadresse": "", "abholfrist": ""}
+    # Infos aus der Mail enthalten die Abholung
+    assert pakete.infos(t, "dhl", date(2026, 10, 30))["abholcode"] == "482913"
+    assert pakete.ruecksendefrist("Zalando SE", "dpd", date(2026, 10, 30)) == "2027-02-07"
+    assert pakete.ruecksendefrist("Kindle Paperwhite", "amazon", date(2026, 10, 30)) == "2026-11-29"
+    assert pakete.ruecksendefrist("Kleinanzeigen", "dhl", date(2026, 10, 30)) == ""
+    assert pakete.paketsteuerung("dpd", "0123").startswith("https://my.dpd.de/")

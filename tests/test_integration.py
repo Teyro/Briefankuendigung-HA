@@ -437,3 +437,57 @@ def eid_plattform(hass: HomeAssistant, entry, plattform: str, art: str) -> str:
     e = er.async_get(hass).async_get_entity_id(plattform, DOMAIN, f"{entry.entry_id}_{art}")
     assert e, art
     return e
+
+
+async def test_niemand_da_abholung_rueckgabe(hass: HomeAssistant, hass_client, tmp_path) -> None:
+    """1.7: Abholcode/Abholstelle in der Liste, Rücksendefrist, Kalender, Hinweis „Niemand zu Hause“."""
+    from homeassistant.util import dt as dt_util
+    hass.config.config_dir = str(tmp_path)
+    meldungen = async_mock_service(hass, "notify", "handy")
+    hass.states.async_set("person.kim", "not_home")
+    hass.states.async_set("person.johanna", "work")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de",
+                            options={"paketdienste": ["dhl", "dpd"], "mitteilen": ["notify.handy"], "niemand_da_melden": True,
+                                     "oeffentliche_seiten": False})
+    entry.add_to_hass(hass)
+    jetzt = int(time.time() * 1000)
+    heute = dt_util.now().date().isoformat()
+    neue = [
+        {"id": "1" * 20, "datum": jetzt - 3600_000, "art": "paket", "absender": "Thalia", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "00340434161094015902", "stand": "abholbereit", "dienst": "dhl", "erwartet": "", "zeitfenster": "", "empfaenger": "",
+         "abholcode": "482913", "abholort": "Packstation 123", "abholadresse": "Musterstraße 12, 20095 Hamburg", "abholfrist": "2099-01-05"},
+        {"id": "2" * 20, "datum": jetzt - 1800_000, "art": "paket", "absender": "OTTO", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "01234567890123", "stand": "unterwegs", "dienst": "dpd", "erwartet": heute, "zeitfenster": "", "empfaenger": ""},
+        {"id": "3" * 20, "datum": jetzt - 600_000, "art": "paket", "absender": "Zalando SE", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "01234567890999", "stand": "zugestellt", "dienst": "dpd", "erwartet": "", "zeitfenster": "", "empfaenger": ""},
+    ]
+    with patch.object(abruf, "abrufen", return_value=(neue, set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+    client = await hass_client()
+    daten = await (await client.get("/api/briefankuendigung/briefe")).json()
+    nach = {b["id"]: b for b in daten["briefe"]}
+    assert nach["1" * 20]["abholcode"] == "482913" and nach["1" * 20]["abholort"] == "Packstation 123"
+    assert nach["3" * 20]["ruecksendefrist"] > heute and nach["2" * 20]["ruecksendefrist"] == ""
+
+    # niemand zu Hause und OTTO kommt heute → einmal Bescheid
+    a = hass.data[DOMAIN][entry.entry_id]
+    a.niemand_da_pruefen()
+    a.niemand_da_pruefen()
+    await hass.async_block_till_done()
+    titel = [m.data["title"] for m in meldungen]
+    assert titel.count("📦 Heute kommt ein Paket – niemand ist zu Hause") == 1, titel
+    hass.states.async_set("person.kim", "home")
+    a.index.pop("niemand_da_gemeldet")
+    a.niemand_da_pruefen()
+    await hass.async_block_till_done()
+    assert [m.data["title"] for m in meldungen].count("📦 Heute kommt ein Paket – niemand ist zu Hause") == 1, "jemand ist da"
+
+    # Kalender: Abholfrist und Rückgabe
+    kal = eid_plattform(hass, entry, "calendar", "lieferungen")
+    antwort = await hass.services.async_call("calendar", "get_events", {"entity_id": kal, "start_date_time": "2099-01-04 00:00:00",
+                                                                         "end_date_time": "2099-01-06 00:00:00"}, blocking=True, return_response=True)
+    assert [e["summary"] for e in antwort[kal]["events"]] == ["📦 Abholen bis heute: Thalia (DHL)"]
+    assert await hass.config_entries.async_unload(entry.entry_id)

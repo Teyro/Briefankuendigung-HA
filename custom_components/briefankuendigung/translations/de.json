@@ -26,7 +26,8 @@
           "ship24_schluessel": "Ship24-Schlüssel (optional, Ersatz für 17TRACK)",
           "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS Client-Secret",
-          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)"
+          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)",
+          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)"
         }
       }
     },
@@ -60,7 +61,8 @@
           "ship24_schluessel": "Ship24-Schlüssel (optional, Ersatz für 17TRACK)",
           "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS Client-Secret",
-          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)"
+          "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)",
+          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)"
         }
       }
     }

@@ -133,7 +133,8 @@ def erwartet(text: str, bezug: date) -> tuple[str, str]:
 def infos(text: str, dienst: str, bezug: date | None = None) -> dict:
     """Alles aus einer Paket-Mail: absender, sendung, stand, erwartet, zeitfenster."""
     e, f = erwartet(text, bezug or date.today())
-    return {"absender": absender(text, dienst), "sendung": nummer(text, dienst), "stand": stand(text), "erwartet": e, "zeitfenster": f}
+    return {"absender": absender(text, dienst), "sendung": nummer(text, dienst), "stand": stand(text), "erwartet": e, "zeitfenster": f,
+            **abholung(text, bezug)}
 
 
 def verfolgen(dienst: str, sendung: str) -> str:
@@ -376,3 +377,73 @@ def dhl_oeffentlich_status(antwort: dict) -> dict | None:
     if not zu and stand == "zugestellt":
         stand = _stand_aus_text(text)
     return {"stand": stand, "erwartet": "", "text": str(text)[:160], "ereignisse": ereignisse, "ende": zu, "problem": False}
+
+
+# --- Abholen: Code, Abholstelle und Frist aus den Mails (Packstation, Paketshop, Filiale, Amazon Locker) ---
+
+_ABHOLSTELLE = r"(Packstation(?:\s+\d{2,4})?|Paketshop|PaketShop|Paket-Shop|Postfiliale|Filiale|Partner-Filiale|Pickup(?:\s+Paketshop)?|Amazon\s+(?:Locker|Hub|Counter)|Paketbox|Paketkasten)"
+
+
+def abholung(text: str, bezug: date | None = None) -> dict:
+    """{abholcode, abholort, abholadresse, abholfrist} – leere Werte, wenn nichts davon in der Mail steht"""
+    t = re.sub(r"[ \t\xa0]+", " ", text or "")
+    erg = {"abholcode": "", "abholort": "", "abholadresse": "", "abholfrist": ""}
+    m = re.search(r"(?:Abhol-?code|Abholnummer|Abhol-PIN|PIN|Code zur Abholung|Abholungscode)\s*(?:lautet|ist)?\s*:?\s*([0-9]{4,8}|[A-Z0-9]{5,10})\b", t, re.I)
+    if m and not re.fullmatch(r"\d{10,}", m.group(1)):
+        erg["abholcode"] = m.group(1).upper()
+    stadt = r"([A-ZÄÖÜ][\wäöüßÄÖÜ\-]+(?: (?:an der |am |im |bei )?[A-ZÄÖÜ(][\wäöüßÄÖÜ\-()]+)?)"
+    m = re.search(_ABHOLSTELLE + r"([^\n]{0,60}?)[,\n:]\s*([A-ZÄÖÜ][^\n,]{2,50}?\s\d+\s?[a-zA-Z]?)\s*,?\s*\n?\s*(\d{5})\s+" + stadt, t)
+    if m:
+        rest = m.group(2).split(":")[-1].strip(" ,:-–")
+        # „… in die Postfiliale gebracht: Postfiliale 512“ → „Postfiliale 512“
+        erg["abholort"] = " ".join((rest if re.match(_ABHOLSTELLE, rest) else m.group(1) + " " + rest).split())
+        erg["abholadresse"] = f"{' '.join(m.group(3).split())}, {m.group(4)} {m.group(5).strip()}"
+    else:
+        m = re.search(_ABHOLSTELLE + r"(?:\s*[-–:]\s*([^\n.,]{2,40}))?", t)
+        if m and re.search(r"abhol|liegt|bereit|hinterlegt|gebracht", t, re.I):
+            erg["abholort"] = " ".join((m.group(1) + (" – " + m.group(2).strip() if m.group(2) else "")).split())
+    m = re.search(r"(?:bis(?:\s+(?:zum|spätestens))?|spätestens(?:\s+am)?)\s+(?:\w+,\s*)?(\d{1,2})\.\s?(\d{1,2})\.(\d{2,4})?", t, re.I)
+    if m and (erg["abholcode"] or erg["abholort"]):
+        b = bezug or date.today()
+        try:
+            j = int(m.group(3)) if m.group(3) else b.year
+            frist = date(j + 2000 if j < 100 else j, int(m.group(2)), int(m.group(1)))
+            if not m.group(3) and frist < b - timedelta(days=60):
+                frist = frist.replace(year=frist.year + 1)
+            erg["abholfrist"] = frist.isoformat()
+        except ValueError:
+            pass
+    return erg
+
+
+# --- Rücksendefristen der großen Shops (Tage ab Zustellung; ohne Gewähr – die AGB des Shops gelten) ---
+
+RUECKGABE_TAGE = {
+    "zalando": 100, "about you": 100, "aboutyou": 100, "ikea": 365, "decathlon": 365, "tchibo": 30, "otto": 30, "amazon": 30,
+    "h&m": 30, "hm.com": 30, "mediamarkt": 30, "media markt": 30, "saturn": 30, "thalia": 14, "lidl": 30, "bonprix": 30,
+    "baur": 30, "galeria": 30, "esprit": 30, "c&a": 30, "zara": 30, "mango": 30, "asos": 28, "shein": 45, "temu": 90,
+    "apple": 14, "notebooksbilliger": 30, "alternate": 14, "cyberport": 14, "conrad": 30, "douglas": 30, "flaconi": 30,
+}
+
+
+def ruecksendefrist(absender: str, dienst: str, zugestellt: date | None) -> str:
+    """„2026-12-08“: bis wann zurückschicken (aus Shop und Zustelltag) – "" wenn unbekannt"""
+    if not zugestellt:
+        return ""
+    a = (absender or "").lower()
+    tage = next((t for shop, t in RUECKGABE_TAGE.items() if shop in a), RUECKGABE_TAGE["amazon"] if dienst == "amazon" else 0)
+    return (zugestellt + timedelta(days=tage)).isoformat() if tage else ""
+
+
+def paketsteuerung(dienst: str, sendung: str) -> str:
+    """Zustellung umleiten (Wunschnachbar, Ablageort, Filiale) beim Dienst – sonst die Sendungsverfolgung"""
+    n = quote(sendung or "", safe="")
+    seiten = {
+        "dhl": f"https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?piececode={n}",
+        "hermes": "https://www.myhermes.de/empfangen/zustelloptionen/",
+        "dpd": f"https://my.dpd.de/redirect.aspx?action=1&pno={n}",
+        "gls": f"https://gls-group.com/DE/de/paketverfolgung?match={n}",
+        "ups": f"https://www.ups.com/track?loc=de_DE&tracknum={n}",
+        "amazon": "https://www.amazon.de/gp/css/order-history",
+    }
+    return seiten.get(dienst, verfolgen(dienst, sendung))

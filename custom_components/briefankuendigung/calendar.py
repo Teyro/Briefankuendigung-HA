@@ -39,22 +39,37 @@ class PaketKalender(CalendarEntity):
         self.async_write_ha_state()
 
     def _termine(self) -> list[CalendarEvent]:
+        """Erwartete Lieferungen, Abholfristen und Rücksendefristen"""
+        from . import ruecksendefrist
         erg = []
-        for b in self._abrufer.index["briefe"]:
-            if b.get("art") != "paket" or self._abrufer.ist_erledigt(b):
-                continue
-            tag = b.get("erwartet") or ""
-            if not tag and b.get("stand") in ("heute", "abholbereit"):
-                tag = dt_util.now().date().isoformat()
+
+        def termin(tag: str, titel: str, text: str, uid: str) -> None:
             try:
                 d = date.fromisoformat(tag)
             except ValueError:
+                return
+            erg.append(CalendarEvent(start=d, end=d + timedelta(days=1), summary=titel, description=text or None, uid=uid))
+
+        heute = dt_util.now().date()
+        for b in self._abrufer.index["briefe"]:
+            if b.get("art") != "paket":
                 continue
             dienst = pakete.DIENSTE.get(b.get("dienst") or "dhl", {}).get("name", "")
             name = b.get("name") or b.get("absender") or "Paket"
-            teile = [x for x in (b.get("zeitfenster"), b.get("status_text"), f"Sendung {b['sendung']}" if b.get("sendung") else "") if x]
-            erg.append(CalendarEvent(start=d, end=d + timedelta(days=1), summary=f"📦 {name} ({dienst})" if dienst else f"📦 {name}",
-                                     description="\n".join(teile) or None, uid=b["id"]))
+            mit = f"{name} ({dienst})" if dienst else name
+            if not self._abrufer.ist_erledigt(b):
+                tag = b.get("erwartet") or ""
+                if not tag and b.get("stand") in ("heute", "abholbereit"):
+                    tag = heute.isoformat()
+                teile = [x for x in (b.get("zeitfenster"), b.get("status_text"), f"Sendung {b['sendung']}" if b.get("sendung") else "") if x]
+                termin(tag, f"📦 {mit}", "\n".join(teile), b["id"])
+                if b.get("stand") == "abholbereit" and b.get("abholfrist"):
+                    ort = ", ".join(x for x in (b.get("abholort"), b.get("abholadresse")) if x)
+                    code = f"Abholcode {b['abholcode']}" if b.get("abholcode") else ""
+                    termin(b["abholfrist"], f"📦 Abholen bis heute: {mit}", "\n".join(x for x in (ort, code) if x), b["id"] + "-abholen")
+            frist = ruecksendefrist(b)
+            if frist and frist >= heute.isoformat():
+                termin(frist, f"↩︎ Rückgabe bis heute: {mit}", "Rücksendefrist laut Shop (ohne Gewähr)", b["id"] + "-rueckgabe")
         return sorted(erg, key=lambda e: e.start)
 
     @property
