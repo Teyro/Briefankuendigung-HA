@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote
 
 DIENSTE: dict[str, dict] = {
@@ -219,11 +219,23 @@ def ereignisse_zusammen(alt: list | None, neu: list | None, hoechstens: int = 40
     """Verlauf zusammenführen: ohne Doppelte, neuestes zuerst"""
     gesehen, erg = set(), []
     for e in (neu or []) + (alt or []):
-        k = (e.get("zeit", "")[:16], e.get("text", ""))
+        # gleiche Zeit in anderer Schreibweise (+01:00 / Z / ohne Sekunden) ist dasselbe Ereignis
+        k = (_minute(e.get("zeit", "")), " ".join(str(e.get("text", "")).split()))
         if k not in gesehen:
             gesehen.add(k)
             erg.append(e)
-    return sorted(erg, key=lambda e: e.get("zeit", ""), reverse=True)[:hoechstens]
+    return sorted(erg, key=lambda e: _minute(e.get("zeit", "")), reverse=True)[:hoechstens]
+
+
+def _minute(zeit: str) -> str:
+    """ISO-Zeit → UTC auf die Minute ("2026-11-06T14:35"); ohne Zeitzone bzw. unlesbar: wie geschrieben"""
+    try:
+        t = datetime.fromisoformat(str(zeit).replace("Z", "+00:00"))
+    except ValueError:
+        return str(zeit)[:16]
+    if t.tzinfo is None:
+        return t.isoformat()[:16]
+    return t.astimezone(timezone.utc).isoformat()[:16]
 
 
 # 17TRACK: Hauptstand → unser Stand
@@ -376,7 +388,23 @@ def dhl_oeffentlich_status(antwort: dict) -> dict | None:
     stand = "zugestellt" if zu else _stand_aus_text(ereignisse[0]["text"] if ereignisse else text)
     if not zu and stand == "zugestellt":
         stand = _stand_aus_text(text)
-    return {"stand": stand, "erwartet": "", "text": str(text)[:160], "ereignisse": ereignisse, "ende": zu, "problem": False}
+    erwartet, zeitfenster = dhl_zustellung(sd.get("zustellung"))
+    return {"stand": stand, "erwartet": "" if zu else erwartet, "zeitfenster": "" if zu else zeitfenster,
+            "text": str(text)[:160], "ereignisse": ereignisse, "ende": zu, "problem": False}
+
+
+def dhl_zustellung(z) -> tuple[str, str]:
+    """Voraussichtliche Zustellung der öffentlichen DHL-Verfolgung: zustellzeitfensterVon/Bis ("2026-11-07"
+    oder mit Uhrzeit "2026-11-07T10:00:00+01:00") → ("2026-11-07", "10:00–12:00")"""
+    if not isinstance(z, dict):
+        return "", ""
+    von, bis = str(z.get("zustellzeitfensterVon") or ""), str(z.get("zustellzeitfensterBis") or "")
+    if not re.match(r"\d{4}-\d{2}-\d{2}", von):
+        return "", ""
+    fenster = ""
+    if "T" in von and "T" in bis and von[:10] == bis[:10]:
+        fenster = f"{von[11:16]}–{bis[11:16]}"
+    return von[:10], fenster
 
 
 # --- Abholen: Code, Abholstelle und Frist aus den Mails (Packstation, Paketshop, Filiale, Amazon Locker) ---

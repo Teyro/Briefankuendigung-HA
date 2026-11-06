@@ -176,3 +176,21 @@ def test_abholung_und_ruecksendefrist() -> None:
     assert pakete.ruecksendefrist("Kindle Paperwhite", "amazon", date(2026, 10, 30)) == "2026-11-29"
     assert pakete.ruecksendefrist("Kleinanzeigen", "dhl", date(2026, 10, 30)) == ""
     assert pakete.paketsteuerung("dpd", "0123").startswith("https://my.dpd.de/")
+
+
+def test_dhl_voraussichtliche_zustellung() -> None:
+    a = {"sendungen": [{"sendungsdetails": {"istZugestellt": False, "zustellung": {"zustellzeitfensterVon": "2026-11-07", "zustellzeitfensterBis": "2026-11-07"},
+                                            "sendungsverlauf": {"status": "Vorbereitung für Weitertransport", "events": [
+                                                {"datum": "2026-11-06T15:35:57+01:00", "status": "Die Sendung wurde von DHL bearbeitet und wird für den Weitertransport in die Region des Empfängers vorbereitet."}]}}}]}
+    st = pakete.dhl_oeffentlich_status(a)
+    assert st["erwartet"] == "2026-11-07" and st["zeitfenster"] == ""
+    assert pakete.dhl_zustellung({"zustellzeitfensterVon": "2026-11-07T10:00:00+01:00", "zustellzeitfensterBis": "2026-11-07T12:30:00+01:00"}) == ("2026-11-07", "10:00–12:30")
+    assert pakete.dhl_zustellung(None) == ("", "") and pakete.dhl_zustellung({"zustellzeitfensterVon": "bald"}) == ("", "")
+
+
+def test_verlauf_ohne_doppelte_bei_anderer_zeitzone() -> None:
+    t = "Die Sendung wurde von DHL bearbeitet und wird für den Weitertransport in die Region des Empfängers vorbereitet."
+    z = pakete.ereignisse_zusammen([{"zeit": "2026-11-06T14:35:57Z", "text": t}],
+                                   [{"zeit": "2026-11-06T15:35:57+01:00", "text": t, "ort": "Augsburg"},
+                                    {"zeit": "2026-11-06T18:13:07+01:00", "text": "Die Sendung wurde elektronisch angekündigt."}])
+    assert len(z) == 2 and z[0]["text"].startswith("Die Sendung wurde elektronisch") and z[1].get("ort") == "Augsburg"
