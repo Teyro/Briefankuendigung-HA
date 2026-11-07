@@ -389,6 +389,9 @@ def dhl_oeffentlich_status(antwort: dict) -> dict | None:
     if not zu and stand == "zugestellt":
         stand = _stand_aus_text(text)
     erwartet, zeitfenster = dhl_zustellung(sd.get("zustellung"))
+    # „Benachrichtigt, liegt in der Filiale“ (Zustellung verpasst) – auch wenn der Text es nicht sagt
+    if not zu and isinstance(sd.get("zustellung"), dict) and sd["zustellung"].get("benachrichtigtInFiliale"):
+        stand = "abholbereit"
     return {"stand": stand, "erwartet": "" if zu else erwartet, "zeitfenster": "" if zu else zeitfenster,
             "text": str(text)[:160], "ereignisse": ereignisse, "ende": zu, "problem": False}
 

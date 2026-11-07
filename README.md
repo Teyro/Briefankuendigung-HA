@@ -155,6 +155,8 @@ Alle Adressen brauchen ein gültiges Home-Assistant-Token und zeigen nur Postfä
 | `POST /api/briefankuendigung/abrufen[?konto=]` | Postfach jetzt lesen (höchstens einmal pro Minute) |
 | `POST /api/briefankuendigung/sendung` | `{"nummer": "…", "dienst": "dpd", "name": "…", "konto": "…", "stand_info": {…}}` – Sendung von Hand verfolgen (ab 1.4); ab 1.8 mit dem Stand des Geräts (`stand`, `ereignisse`, `text`, `erwartet`, `erledigt` …) |
 | `POST /api/briefankuendigung/sendung/entfernen` | `{"id": "…"}` – eigene Sendung entfernen (aus Mails: als angekommen markieren) |
+| `POST /api/briefankuendigung/notiz` | `{"id": "…", "notiz": "Beim Nachbarn Nr. 12"}` – gemeinsame Notiz mit dem Namen des HA-Benutzers (`notiz`, `notiz_von`, `notiz_zeit`; ab 1.9) |
+| `POST`/`GET /api/briefankuendigung/diagnose` | Berichte der Widgets (nur im Speicher, letzte 30; ab 1.9) |
 
 Pakete haben ab 1.4 zusätzlich `dienst`, `dienst_name`, `erwartet` (`2026-10-23`), `zeitfenster`, `kundenkonto`,
 `verfolgen` (Link), `manuell` und `status_text` (DHL live).

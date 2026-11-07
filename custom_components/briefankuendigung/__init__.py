@@ -26,7 +26,8 @@ import os
 import re
 import time
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
+from urllib.parse import quote
 from functools import partial
 
 from aiohttp import web
@@ -42,7 +43,7 @@ from homeassistant.util import dt as dt_util
 
 from . import abruf, pakete
 from .const import (
-    ARCHIV_TAGE, CONF_ABWESEND, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
+    ARCHIV_TAGE, CONF_ABWESEND, CONF_MORGEN, CONF_BENUTZER_HA, CONF_DHL_SCHLUESSEL, CONF_EREIGNIS_ABSENDER, CONF_KUNDENKONTEN, CONF_MITTEILEN, CONF_NAME,
     CONF_OEFFENTLICH, CONF_SHIP24, CONF_SIEBZEHN, CONF_TAGE, CONF_UPS_GEHEIM, CONF_UPS_ID, CONF_WICHTIG, CONF_ZEITEN, DOMAIN, EREIGNIS,
     EREIGNIS_PAKET, SIGNAL_NEU, STANDARD,
 )
@@ -427,6 +428,38 @@ class BriefAbruf:
             return bool(b.get("ereignisse"))
         return bool(self.cfg.get(CONF_SIEBZEHN)) and b.get("t17") == 1 and bool(b.get("ereignisse"))
 
+    async def async_notiz(self, brief_id: str, notiz: str, wer: str) -> bool:
+        """Gemeinsame Notiz zu einer Sendung („Beim Nachbarn Nr. 12“, „Hab ich angenommen“) – sehen alle Geräte"""
+        b = next((x for x in self.index["briefe"] if x["id"] == brief_id), None)
+        if not b:
+            return False
+        notiz = " ".join(notiz.split())[:200]
+        if notiz:
+            b.update({"notiz": notiz, "notiz_von": wer[:60], "notiz_zeit": int(time.time() * 1000)})
+        else:
+            for k in ("notiz", "notiz_von", "notiz_zeit"):
+                b.pop(k, None)
+        await self._speichern_jetzt()
+        return True
+
+    @callback
+    def morgen_ueberblick(self, *_args) -> None:
+        """Morgens einmal: was heute an Briefen und Paketen kommt (nur, wenn etwas kommt)"""
+        dienste = [d for d in (self.cfg.get(CONF_MITTEILEN) or []) if d.startswith("notify.")]
+        tag = dt_util.now().date().isoformat()
+        if not dienste or self.index.get("morgen_gemeldet") == tag:
+            return
+        text = morgen_text(self, tag)
+        if not text:
+            return
+        self.index["morgen_gemeldet"] = tag
+        self.hass.async_create_task(self._speichern_jetzt())
+        mehrere = len(_abrufer(self.hass)) > 1
+        daten = {"title": "☀️ Post heute" + (f" – {self.name}" if mehrere else ""), "message": text,
+                 "data": {"url": "paketbote://", "group": "pakete", "tag": f"morgen-{self.entry.entry_id}"}}
+        for d in dienste:
+            self.hass.async_create_task(self.hass.services.async_call("notify", d.split(".", 1)[1], daten, blocking=False))
+
     def heute_text(self) -> dict:
         """Für Sprachassistent und Automationen: was heute kommt (Satz und Liste)"""
         heute = dt_util.now().date().isoformat()
@@ -539,8 +572,13 @@ class BriefAbruf:
         name = b.get("name") or b.get("absender") or b.get("sendung") or "Paket"
         dienst = pakete.DIENSTE.get(b.get("dienst") or "", {}).get("name", "")
         text = name + (f" ({dienst})" if dienst else "") + (f" – {b['status_text']}" if anlass == "problem" and b.get("status_text") else "")
-        daten = {"title": MELDEN[anlass], "message": text,
-                 "data": {"url": pakete.verfolgen(b.get("dienst") or "dhl", b.get("sendung", "")), "group": "pakete", "tag": f"paket-{b['id']}"}}
+        titel = MELDEN[anlass]
+        url = pakete.verfolgen(b.get("dienst") or "dhl", b.get("sendung", ""))
+        if anlass == "abholbereit":
+            titel, text, route = abhol_mitteilung(b, name, dienst)
+            url = route or url
+        daten = {"title": titel, "message": text,
+                 "data": {"url": url, "group": "pakete", "tag": f"paket-{b['id']}"}}
         for d in dienste:
             self.hass.async_create_task(self.hass.services.async_call("notify", d.split(".", 1)[1], daten, blocking=False))
 
@@ -652,6 +690,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.http.register_view(SendungAnsicht(hass))
         hass.http.register_view(SendungEntfernenAnsicht(hass))
         hass.http.register_view(SendungNameAnsicht(hass))
+        hass.http.register_view(NotizAnsicht(hass))
+        hass.http.register_view(DiagnoseAnsicht(hass))
         daten["_ansichten"] = True
         _dienste_anmelden(hass)
         await _karte_anmelden(hass)
@@ -676,6 +716,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(async_track_time_change(hass, abrufer.niemand_da_pruefen, hour=7, minute=30, second=0))
         entry.async_on_unload(async_track_state_change_event(hass, hass.states.async_entity_ids("person"), abrufer.niemand_da_pruefen))
     entry.async_on_unload(async_call_later(hass, timedelta(seconds=150), abrufer.async_ersatz_aktualisieren))
+    # Morgen-Überblick (Standard 7:00; leer = aus)
+    for stunde, minute in zeiten_lesen(abrufer.cfg.get(CONF_MORGEN, "07:00") or "")[:1]:
+        entry.async_on_unload(async_track_time_change(hass, abrufer.morgen_ueberblick, hour=stunde, minute=minute, second=0))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_neu_laden))
@@ -967,6 +1010,108 @@ class SendungNameAnsicht(HomeAssistantView):
             if a.sichtbar_fuer(request.get("hass_user")) and await a.async_umbenennen(brief_id, str(daten.get("name") or "")):
                 return self.json({"id": brief_id})
         return self.json_message("Sendung nicht gefunden", 404)
+
+
+def abhol_mitteilung(b: dict, name: str, dienst: str) -> tuple[str, str, str]:
+    """Titel, Text und Route-Link für „liegt zur Abholung bereit“ – „verpasst“, wenn die Zustellung vorher scheiterte"""
+    verlauf = " ".join(str(e.get("text", "")).lower() for e in (b.get("ereignisse") or [])[:6])
+    verpasst = any(w in verlauf for w in ("nicht zugestellt", "konnte nicht", "nicht angetroffen", "benachrichtigungskarte", "benachrichtigt"))
+    titel = "📦 Zustellung verpasst – zur Abholung bereit" if verpasst else MELDEN["abholbereit"]
+    teile = [name + (f" ({dienst})" if dienst else "")]
+    ort = " · ".join(x for x in (b.get("abholort"), b.get("abholadresse")) if x)
+    if ort:
+        teile.append(ort)
+    if b.get("abholcode"):
+        teile.append(f"Abholcode {b['abholcode']}")
+    if b.get("abholfrist"):
+        try:
+            teile.append("abholen bis " + date.fromisoformat(b["abholfrist"]).strftime("%d.%m."))
+        except ValueError:
+            pass
+    route = f"https://maps.apple.com/?daddr={quote(b['abholadresse'])}" if b.get("abholadresse") else ""
+    return titel, " – ".join(teile), route
+
+
+def morgen_text(a: "BriefAbruf", tag: str) -> str:
+    """„2 Pakete: Thalia (DHL, 10:00–13:00), Kindle (Amazon) · 1 Brief: Finanzamt (wichtig) · Abholen: Kaffee (Packstation 123)“"""
+    teile = []
+    offen = [b for b in a.index["briefe"] if b.get("art") == "paket" and not a.ist_erledigt(b) and b.get("stand") != "zugestellt"]
+    kommt = [b for b in offen if b.get("stand") == "heute" or (b.get("erwartet") == tag and b.get("stand") != "abholbereit")]
+    abholen = [b for b in offen if b.get("stand") == "abholbereit"]
+
+    def paket(b: dict) -> str:
+        d = pakete.DIENSTE.get(b.get("dienst") or "dhl", {}).get("name", "")
+        zusatz = ", ".join(x for x in (d, b.get("zeitfenster") or "") if x)
+        return (b.get("name") or b.get("absender") or "Paket") + (f" ({zusatz})" if zusatz else "")
+
+    if kommt:
+        teile.append(("1 Paket: " if len(kommt) == 1 else f"{len(kommt)} Pakete: ") + ", ".join(paket(b) for b in kommt[:4]))
+    briefe = [b for b in a.heute() if b.get("art", "brief") == "brief" and not a.ist_erledigt(b)]
+    if briefe:
+        teile.append(("1 Brief: " if len(briefe) == 1 else f"{len(briefe)} Briefe: ")
+                     + ", ".join(b["absender"] + (" (wichtig)" if a.ist_wichtig(b["absender"]) else "") for b in briefe[:4]))
+    if abholen:
+        teile.append("Abholen: " + ", ".join((b.get("name") or b.get("absender") or "Paket") + (f" ({b['abholort']})" if b.get("abholort") else "")
+                                             for b in abholen[:3]))
+    return " · ".join(teile)
+
+
+class NotizAnsicht(HomeAssistantView):
+    """Gemeinsame Notiz: POST {"id", "notiz"} ("" = löschen) – mit dem Namen des Home-Assistant-Benutzers"""
+
+    url = "/api/briefankuendigung/notiz"
+    name = "api:briefankuendigung:notiz"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            daten = await request.json()
+        except ValueError:
+            return self.json_message("Ungültige Anfrage", 400)
+        brief_id = str(daten.get("id") or "") if isinstance(daten, dict) else ""
+        if not re.fullmatch(r"[0-9a-f]{20}", brief_id):
+            return self.json_message("Ungültige ID", 400)
+        benutzer = request.get("hass_user")
+        wer = (benutzer.name if benutzer is not None and benutzer.name else "") or ""
+        for a in _abrufer(self.hass):
+            if a.sichtbar_fuer(benutzer) and await a.async_notiz(brief_id, str(daten.get("notiz") or ""), wer):
+                return self.json({"id": brief_id})
+        return self.json_message("Sendung nicht gefunden", 404)
+
+
+class DiagnoseAnsicht(HomeAssistantView):
+    """Berichte der Widgets (startet das Apple-Widget? hat es Zugang? welcher Fehler?) – nur im Speicher, die letzten 30.
+    POST {"quelle", "bericht"}; GET liefert sie (neueste zuerst)."""
+
+    url = "/api/briefankuendigung/diagnose"
+    name = "api:briefankuendigung:diagnose"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    def _liste(self) -> list:
+        return self.hass.data.setdefault(DOMAIN, {}).setdefault("_diagnose", [])
+
+    async def post(self, request: web.Request) -> web.Response:
+        try:
+            daten = await request.json()
+        except ValueError:
+            return self.json_message("Ungültige Anfrage", 400)
+        if not isinstance(daten, dict):
+            return self.json_message("Ungültige Anfrage", 400)
+        eintrag = {"zeit": int(time.time() * 1000), "quelle": str(daten.get("quelle") or "")[:60], "bericht": str(daten.get("bericht") or "")[:600]}
+        liste = self._liste()
+        liste.insert(0, eintrag)
+        del liste[30:]
+        _LOGGER.info("Briefankündigung: Widget-Bericht %s: %s", eintrag["quelle"], eintrag["bericht"])
+        return self.json({"ok": True})
+
+    async def get(self, request: web.Request) -> web.Response:
+        return self.json({"berichte": self._liste()})
 
 
 @callback

@@ -527,3 +527,60 @@ async def test_app_abgleich_mit_stand(hass: HomeAssistant, hass_client, tmp_path
     r = await client.post("/api/briefankuendigung/sendung", json={"nummer": "01234567890123", "dienst": "dpd", "stand_info": {"stand": "<x>"}})
     assert (await r.json())["stand"] == "unterwegs"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_morgen_notiz_diagnose_verpasst(hass: HomeAssistant, hass_client, tmp_path) -> None:
+    """1.9: Morgen-Überblick, gemeinsame Notiz, Widget-Diagnose, Mitteilung „Zustellung verpasst“ mit Route."""
+    from homeassistant.util import dt as dt_util
+    hass.config.config_dir = str(tmp_path)
+    meldungen = async_mock_service(hass, "notify", "handy")
+    entry = MockConfigEntry(domain=DOMAIN, data=DATEN, unique_id="kim@gmx.de",
+                            options={"paketdienste": ["dhl"], "mitteilen": ["notify.handy"], "oeffentliche_seiten": False})
+    entry.add_to_hass(hass)
+    jetzt = int(time.time() * 1000)
+    heute = dt_util.now().date().isoformat()
+    neue = [
+        {"id": "4" * 20, "datum": jetzt - 3600_000, "art": "paket", "absender": "Thalia", "betreff": "", "bild": None, "bild_typ": None,
+         "sendung": "00340434161094015902", "stand": "unterwegs", "dienst": "dhl", "erwartet": heute, "zeitfenster": "10:00–13:00", "empfaenger": ""},
+        {"id": "5" * 20, "datum": jetzt - 600_000, "art": "brief", "absender": "Finanzamt Hamburg", "betreff": "", "bild": None, "bild_typ": None},
+    ]
+    with patch.object(abruf, "abrufen", return_value=(neue, set())):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await hass.services.async_call("button", "press", {"entity_id": eid(hass, entry, "abrufen")}, blocking=True)
+        await hass.async_block_till_done()
+    a = hass.data[DOMAIN][entry.entry_id]
+    a.async_ersatz_aktualisieren = AsyncMock()
+    a.morgen_ueberblick()
+    a.morgen_ueberblick()
+    await hass.async_block_till_done()
+    morgen = [m.data for m in meldungen if m.data["title"].startswith("☀️")]
+    assert len(morgen) == 1, morgen
+    assert "1 Paket: Thalia (DHL, 10:00–13:00)" in morgen[0]["message"] and "Finanzamt Hamburg (wichtig)" in morgen[0]["message"]
+
+    client = await hass_client()
+    assert (await client.post("/api/briefankuendigung/notiz", json={"id": "4" * 20, "notiz": "  Beim Nachbarn   Nr. 12 "})).status == 200
+    assert (await client.post("/api/briefankuendigung/notiz", json={"id": "x"})).status == 400
+    assert (await client.post("/api/briefankuendigung/notiz", json={"id": "f" * 20, "notiz": "a"})).status == 404
+    b = next(x for x in (await (await client.get("/api/briefankuendigung/briefe")).json())["briefe"] if x["id"] == "4" * 20)
+    assert b["notiz"] == "Beim Nachbarn Nr. 12" and b["notiz_zeit"] > 0
+    await client.post("/api/briefankuendigung/notiz", json={"id": "4" * 20, "notiz": ""})
+    b = next(x for x in (await (await client.get("/api/briefankuendigung/briefe")).json())["briefe"] if x["id"] == "4" * 20)
+    assert "notiz" not in b
+
+    assert (await client.post("/api/briefankuendigung/diagnose", json={"quelle": "widget-ios", "bericht": "Zeitleiste ok"})).status == 200
+    berichte = (await (await client.get("/api/briefankuendigung/diagnose")).json())["berichte"]
+    assert berichte[0]["quelle"] == "widget-ios" and berichte[0]["bericht"] == "Zeitleiste ok"
+
+    # Zustellung verpasst → liegt in der Filiale: Mitteilung mit Ort, Code, Frist und Route
+    b = next(x for x in a.index["briefe"] if x["id"] == "4" * 20)
+    b.update({"abholort": "Postfiliale 512", "abholadresse": "Steindamm 1, 20099 Hamburg", "abholcode": "", "abholfrist": "2099-01-05"})
+    a._live_uebernehmen(b, {"stand": "abholbereit", "text": "Die Sendung liegt in der Filiale zur Abholung bereit.", "ereignisse": [
+        {"zeit": "2026-11-07T14:00:00+01:00", "text": "Die Sendung liegt in der Filiale zur Abholung bereit."},
+        {"zeit": "2026-11-07T11:00:00+01:00", "text": "Der Empfänger wurde nicht angetroffen. Die Sendung wird in eine Filiale gebracht."}]})
+    await hass.async_block_till_done()
+    verpasst = [m.data for m in meldungen if "verpasst" in m.data["title"]]
+    assert len(verpasst) == 1, [m.data["title"] for m in meldungen]
+    assert "Postfiliale 512" in verpasst[0]["message"] and "abholen bis 05.01." in verpasst[0]["message"]
+    assert verpasst[0]["data"]["url"].startswith("https://maps.apple.com/?daddr=Steindamm")
+    assert await hass.config_entries.async_unload(entry.entry_id)

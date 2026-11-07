@@ -27,7 +27,8 @@
           "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS Client-Secret",
           "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)",
-          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)"
+          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)",
+          "morgen_ueberblick": "Morgen-Überblick per Mitteilung um (z. B. 07:00; leer = aus) – was heute an Briefen und Paketen kommt"
         }
       }
     },
@@ -62,7 +63,8 @@
           "ups_client_id": "UPS Client-ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS Client-Secret",
           "oeffentliche_seiten": "Öffentliche Sendungsverfolgung von GLS und DPD als Notnagel (inoffiziell, ohne Schlüssel)",
-          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)"
+          "niemand_da_melden": "Hinweis, wenn heute ein Paket kommt und niemand zu Hause ist (über die Personen in Home Assistant; braucht „Mitteilungen an“)",
+          "morgen_ueberblick": "Morgen-Überblick per Mitteilung um (z. B. 07:00; leer = aus) – was heute an Briefen und Paketen kommt"
         }
       }
     }

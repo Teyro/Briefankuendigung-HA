@@ -27,7 +27,8 @@
           "ups_client_id": "UPS client ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS client secret",
           "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)",
-          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)"
+          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)",
+          "morgen_ueberblick": "Morning summary notification at (e.g. 07:00; empty = off) – letters and parcels arriving today"
         }
       }
     },
@@ -62,7 +63,8 @@
           "ups_client_id": "UPS client ID (optional, developer.ups.com)",
           "ups_client_secret": "UPS client secret",
           "oeffentliche_seiten": "Public GLS and DPD tracking pages as a last resort (unofficial, no key)",
-          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)"
+          "niemand_da_melden": "Notify when a parcel arrives today and nobody is home (based on the persons in Home Assistant; needs “Send notifications to”)",
+          "morgen_ueberblick": "Morning summary notification at (e.g. 07:00; empty = off) – letters and parcels arriving today"
         }
       }
     }
