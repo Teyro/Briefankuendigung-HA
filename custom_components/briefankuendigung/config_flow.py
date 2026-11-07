@@ -54,7 +54,7 @@ def _optionen_schema(v: dict, benutzer: list[SelectOptionDict], melder: list[str
         vol.Optional(CONF_UPS_GEHEIM, default=v.get(CONF_UPS_GEHEIM, "")): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         vol.Optional(CONF_OEFFENTLICH, default=v.get(CONF_OEFFENTLICH, True)): BooleanSelector(),
         vol.Optional(CONF_ABWESEND, default=v.get(CONF_ABWESEND, False)): BooleanSelector(),
-        vol.Optional(CONF_MORGEN, default=v.get(CONF_MORGEN, "07:00")): str,
+        vol.Optional(CONF_MORGEN, default=v.get(CONF_MORGEN, "")): str,
         vol.Optional(CONF_MITTEILEN, default=v.get(CONF_MITTEILEN, [])): SelectSelector(
             SelectSelectorConfig(options=sorted(set((melder or []) + list(v.get(CONF_MITTEILEN, [])))), multiple=True, custom_value=True)),
         vol.Optional(CONF_PAKET, default=v.get(CONF_PAKET, STANDARD[CONF_PAKET])): str,

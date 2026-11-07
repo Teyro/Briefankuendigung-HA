@@ -716,8 +716,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(async_track_time_change(hass, abrufer.niemand_da_pruefen, hour=7, minute=30, second=0))
         entry.async_on_unload(async_track_state_change_event(hass, hass.states.async_entity_ids("person"), abrufer.niemand_da_pruefen))
     entry.async_on_unload(async_call_later(hass, timedelta(seconds=150), abrufer.async_ersatz_aktualisieren))
-    # Morgen-Überblick (Standard 7:00; leer = aus)
-    for stunde, minute in zeiten_lesen(abrufer.cfg.get(CONF_MORGEN, "07:00") or "")[:1]:
+    # Morgen-Überblick (nur mit eingetragener Uhrzeit, z. B. 07:00 – sonst übernimmt „Guten Morgen“ in Mein Tag)
+    for stunde, minute in zeiten_lesen(abrufer.cfg.get(CONF_MORGEN, "") or "")[:1]:
         entry.async_on_unload(async_track_time_change(hass, abrufer.morgen_ueberblick, hour=stunde, minute=minute, second=0))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
